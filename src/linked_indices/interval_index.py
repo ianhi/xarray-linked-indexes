@@ -1,6 +1,6 @@
 from collections.abc import Mapping
-from typing import Any, TypeVar, overload
 from numbers import Integral
+from typing import Any
 
 
 import numpy as np
@@ -14,8 +14,6 @@ from xarray.core.variable import Variable
 __all__ = [
     "DimensionInterval",
 ]
-
-_T = TypeVar("_T")
 
 
 def merge_sel_results(results: list[IndexSelResult]) -> IndexSelResult:
@@ -89,7 +87,6 @@ class DimensionInterval(Index):
             if isinstance(v.dtype, pd.IntervalDtype):
                 i_dim = v.dims[0]
                 interval_index = PandasIndex.from_variables({k: v}, options=options)
-                print(i_dim)
             else:
                 c_dim = v.dims[0]
                 cont_index = PandasIndex.from_variables({k: v}, options=options)
@@ -112,18 +109,6 @@ class DimensionInterval(Index):
             idx_variables.update(index.create_variables(variables))
 
         return idx_variables
-
-    @overload
-    @staticmethod
-    def _no_zero_slice(indexer: int | np.integer) -> slice: ...
-    @overload
-    @staticmethod
-    def _no_zero_slice(indexer: _T) -> _T: ...
-    @staticmethod
-    def _no_zero_slice(indexer: int | np.integer | _T) -> slice | _T:
-        if isinstance(indexer, (int, np.integer)):
-            return slice(indexer, indexer + 1)
-        return indexer
 
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
@@ -196,11 +181,6 @@ class DimensionInterval(Index):
             #     {self._continuous_name: continuous_indexer}
             # )
         elif continuous_indexer is not None:
-            # print("CONT")
-            # if new_cont_index is None:
-            #     new_cont_index = self._continuous_index.isel
-            #     return None
-            continuous_indexer = self._no_zero_slice(continuous_indexer)
             if isinstance(continuous_indexer, (slice, Integral)):
                 new_cont_index, new_interval_index = co_slice(
                     self._continuous_index,
@@ -214,8 +194,6 @@ class DimensionInterval(Index):
                 raise NotImplementedError
 
         elif interval_indexer is not None:
-            # print("INT")
-            # interval_indexer = self._no_zero_slice(interval_indexer)
             if isinstance(interval_indexer, (slice, Integral)):
                 new_interval_index, new_cont_index = co_slice(
                     self._interval_index,
