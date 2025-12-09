@@ -64,16 +64,16 @@ class DimensionInterval(Index):
         self,
         continuous_index: PandasIndex,
         interval_index: PandasIndex,
+        continuous_dim_name: str,
+        interval_dim_name: str,
     ):
         assert isinstance(interval_index.index, pd.IntervalIndex)
         assert isinstance(continuous_index.index, pd.Index)
         self._continuous_index = continuous_index
         self._interval_index = interval_index
 
-        # hardcoded babeeeyyyyyy
-        self._continuous_name = "time"
-        # self._interval_name = "intervals"
-        self._interval_name = "word"
+        self._continuous_name = continuous_dim_name
+        self._interval_name = interval_dim_name
 
     @classmethod
     def from_variables(cls, variables, *, options):
@@ -88,10 +88,14 @@ class DimensionInterval(Index):
         }
 
         # TODO: are we enforcing contiguousness here or allowing disjoint intervals?
+        c_dim = "time"
+        i_dim = "intervals"
         return cls(
             # more hardocoding - TODO: improve
-            continuous_index=indexes["time"],
-            interval_index=indexes["intervals"],
+            continuous_index=indexes[c_dim],
+            interval_index=indexes[i_dim],
+            continuous_dim_name=c_dim,
+            interval_dim_name=i_dim,
         )
 
     def create_variables(self, variables):
@@ -120,9 +124,7 @@ class DimensionInterval(Index):
         print(indexers)
         # Get indexers for each dimension this index manages
         continuous_indexer = indexers.get(self._continuous_name)
-        self._interval_name = "word"
         interval_indexer = indexers.get(self._interval_name)
-        # interval_indexer = indexers.get("word")
 
         new_cont_index = self._continuous_index
         new_interval_index = self._interval_index
@@ -152,14 +154,10 @@ class DimensionInterval(Index):
                     new_leader_index.index.values.max(),
                 )
 
-            # print(follower_name, follow_slice)
             follow_extremes = follower_index.sel(
                 labels={follower_name: follow_slice}
             ).dim_indexers[follower_name]
-            # print(follower_name)
-            # print(f"follow_extremes: {follow_extremes}")
             new_follower_index = follower_index.isel({follower_name: follow_extremes})
-            # print(new_follower_index)
             return new_leader_index, new_follower_index
 
         if continuous_indexer is not None and interval_indexer is not None:
@@ -169,7 +167,6 @@ class DimensionInterval(Index):
             # so do interval then do contintuous
             # can return a chained self.isel?
 
-            # print("both")
             new_interval_index = self.isel(
                 {self._interval_name: interval_indexer}
             )._interval_index
@@ -216,19 +213,19 @@ class DimensionInterval(Index):
             else:
                 raise NotImplementedError
 
-        # assert new_cont_index is not None
-        # assert new_interval_index is not None
         # kinda wish i could also return a tuple here making one of these NOne
         # but keeping the other one
         # if new_interval_index is not None and new_cont_index is not None:
+        # This is basically GH issue:
+        # https://github.com/pydata/xarray/issues/10477
+        assert new_cont_index is not None
+        assert new_interval_index is not None
         return DimensionInterval(
             continuous_index=new_cont_index,
             interval_index=new_interval_index,
+            continuous_dim_name=self._continuous_name,
+            interval_dim_name=self._interval_name,
         )
-        # elif new_cont_index is not None:
-        #     return new_cont_index
-        # else:
-        #     return new_interval_index
 
     def should_add_coord_to_array(self, name, var, dims) -> bool:
         # TODO: this cannot be right....
@@ -274,29 +271,4 @@ class DimensionInterval(Index):
 
         res = merge_sel_results(results)
 
-        # print("Full RES")
-        # print(res)
-        # if T_bool_arr is not None:
-        #     # print(T_bool_arr)
-        #     res.dim_indexers[self._continuous_name] = T_bool_arr
-        # for t_res in T_results
-        # res.dim_indexers["T"][0:52] = True
-        # res.dim_indexers["T"][77:150] = True
         return res
-        # new_cont_index = self._continuous_index.isel(
-        #     {
-        #         self._continuous_name: slice(
-        #             continuous_indexer, continuous_indexer + 1
-        #         )
-        #     }
-        # )
-        # intervals = self._interval_index.sel(
-        #     labels={
-        #         self._interval_name: self._continuous_index.index[
-        #             continuous_indexer
-        #         ]
-        #     }
-        # )
-        #
-        # which_interval = intervals.dim_indexers[self._interval_name]
-        # new_interval_index = self._interval_index.isel(
