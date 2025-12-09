@@ -82,18 +82,25 @@ class DimensionInterval(Index):
         # TODO:
         # extract interval_name as the dim for interval
         # e.g. word or intervals
-        indexes = {
-            k: PandasIndex.from_variables({k: v}, options=options)
-            for k, v in variables.items()
-        }
+        # find the continuous dim and the interval
+        for k, v in variables.items():
+            # ensure that these are 1d variables
+            assert v.ndim == 1
+            if isinstance(v.dtype, pd.IntervalDtype):
+                i_dim = v.dims[0]
+                interval_index = PandasIndex.from_variables({k: v}, options=options)
+                print(i_dim)
+            else:
+                c_dim = v.dims[0]
+                cont_index = PandasIndex.from_variables({k: v}, options=options)
 
-        # TODO: are we enforcing contiguousness here or allowing disjoint intervals?
-        c_dim = "time"
-        i_dim = "intervals"
+        # TODO: should we be enforcing contiguousness here or allowing disjoint intervals?
+        assert isinstance(i_dim, str)
+        assert isinstance(c_dim, str)
         return cls(
             # more hardocoding - TODO: improve
-            continuous_index=indexes[c_dim],
-            interval_index=indexes[i_dim],
+            continuous_index=cont_index,
+            interval_index=interval_index,
             continuous_dim_name=c_dim,
             interval_dim_name=i_dim,
         )
@@ -121,7 +128,6 @@ class DimensionInterval(Index):
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
     ) -> "DimensionInterval | None":
-        print(indexers)
         # Get indexers for each dimension this index manages
         continuous_indexer = indexers.get(self._continuous_name)
         interval_indexer = indexers.get(self._interval_name)
@@ -145,13 +151,21 @@ class DimensionInterval(Index):
                 )
             else:
                 new_leader_index = leader_index.isel({leader_name: indexer})
+            # we should always get something back here because of how we constructed our slice
+            # also makes the typing way easier below
+            assert new_leader_index is not None
             if isinstance(leader_index.index, pd.IntervalIndex):
+                # TODO:
+                # what if we get multiple intervals?
                 interval = leader_index.index[indexer]
                 follow_slice = slice(interval.left, interval.right)
             else:
+                # pyright is really yelling at me here about the potential typing
+                # not having a min method becacuse they might be an extension array
+                # ignoring becuase pretty sure they should always be numpy arrays
                 follow_slice = slice(
-                    new_leader_index.index.values.min(),
-                    new_leader_index.index.values.max(),
+                    new_leader_index.index.values.min(),  # type: ignore
+                    new_leader_index.index.values.max(),  # type: ignore
                 )
 
             follow_extremes = follower_index.sel(
