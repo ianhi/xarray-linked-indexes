@@ -1,9 +1,7 @@
 from collections.abc import Mapping
-from shutil import which
 from typing import Any, TypeVar, overload
 from numbers import Integral
 
-_T = TypeVar("_T")
 
 import numpy as np
 import pandas as pd
@@ -16,6 +14,8 @@ from xarray.core.variable import Variable
 __all__ = [
     "DimensionInterval",
 ]
+
+_T = TypeVar("_T")
 
 
 def merge_sel_results(results: list[IndexSelResult]) -> IndexSelResult:
@@ -72,12 +72,16 @@ class DimensionInterval(Index):
 
         # hardcoded babeeeyyyyyy
         self._continuous_name = "time"
-        self._interval_name = "intervals"
+        # self._interval_name = "intervals"
+        self._interval_name = "word"
 
     @classmethod
     def from_variables(cls, variables, *, options):
         assert len(variables) == 2
 
+        # TODO:
+        # extract interval_name as the dim for interval
+        # e.g. word or intervals
         indexes = {
             k: PandasIndex.from_variables({k: v}, options=options)
             for k, v in variables.items()
@@ -112,10 +116,13 @@ class DimensionInterval(Index):
 
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
-    ) -> Index | None:
+    ) -> "DimensionInterval | None":
+        print(indexers)
         # Get indexers for each dimension this index manages
         continuous_indexer = indexers.get(self._continuous_name)
+        self._interval_name = "word"
         interval_indexer = indexers.get(self._interval_name)
+        # interval_indexer = indexers.get("word")
 
         new_cont_index = self._continuous_index
         new_interval_index = self._interval_index
@@ -140,18 +147,19 @@ class DimensionInterval(Index):
                 interval = leader_index.index[indexer]
                 follow_slice = slice(interval.left, interval.right)
             else:
-                print(
+                follow_slice = slice(
                     new_leader_index.index.values.min(),
                     new_leader_index.index.values.max(),
                 )
 
+            # print(follower_name, follow_slice)
             follow_extremes = follower_index.sel(
                 labels={follower_name: follow_slice}
             ).dim_indexers[follower_name]
-            print(f"follow_extremes: {follow_extremes}")
-            new_follower_index = follower_index.isel(
-                {follower_name: slice(follow_extremes[0], follow_extremes[1] + 1)}
-            )
+            # print(follower_name)
+            # print(f"follow_extremes: {follow_extremes}")
+            new_follower_index = follower_index.isel({follower_name: follow_extremes})
+            # print(new_follower_index)
             return new_leader_index, new_follower_index
 
         if continuous_indexer is not None and interval_indexer is not None:
@@ -161,8 +169,23 @@ class DimensionInterval(Index):
             # so do interval then do contintuous
             # can return a chained self.isel?
 
-            raise NotImplementedError
+            # print("both")
+            new_interval_index = self.isel(
+                {self._interval_name: interval_indexer}
+            )._interval_index
+            new_cont_index = self.isel(
+                {self._continuous_name: continuous_indexer}
+            )._continuous_index
+
+            # there are definitely some cases that above will not handle well. in particular double isel selections
+            # will almost certainly break
+            # can't just chain them. becuase then you end up double slicing time in potentially incompatible ways
+            # so time ends up too short
+            # return self.isel({self._interval_name: interval_indexer}).isel(
+            #     {self._continuous_name: continuous_indexer}
+            # )
         elif continuous_indexer is not None:
+            # print("CONT")
             # if new_cont_index is None:
             #     new_cont_index = self._continuous_index.isel
             #     return None
@@ -180,6 +203,7 @@ class DimensionInterval(Index):
                 raise NotImplementedError
 
         elif interval_indexer is not None:
+            # print("INT")
             # interval_indexer = self._no_zero_slice(interval_indexer)
             if isinstance(interval_indexer, (slice, Integral)):
                 new_interval_index, new_cont_index = co_slice(
@@ -208,6 +232,10 @@ class DimensionInterval(Index):
 
     def should_add_coord_to_array(self, name, var, dims) -> bool:
         # TODO: this cannot be right....
+        # passes name of dataarray
+        # this gets passed a single coord
+        # then decide what to do with it
+        # dims is dimension of dataarray, not the coord (which is var here)
         return True
 
     def sel(self, labels, **kwargs):
@@ -221,41 +249,28 @@ class DimensionInterval(Index):
             if k == self._continuous_name:
                 cont_res = self._continuous_index.sel({k: labels[k]}, **kwargs)
                 results.append(cont_res)
-                # values = cont_res.dim_indexers[self._continuous_name]
-                # print(values)
-                # print(type(values))
-                # if isinstance(values, (np.integer, int)):
-                #     print(self._continuous_index.index[values])
-                #     intervals = self._interval_index.sel(
-                #         labels={
-                #             self._interval_name: self._continuous_index.index[values]
-                #         }
-                #     )
-                #     print(intervals)
-                #     results.append(intervals)
-                #     self._continuous_index.index
-                # else:
-                #     # TODO: handle a slice or array
-                #     raise NotImplementedError
+                values = cont_res.dim_indexers[self._continuous_name]
+                if isinstance(values, Integral):
+                    intervals = self._interval_index.sel(
+                        labels={
+                            self._interval_name: self._continuous_index.index[values]
+                        }
+                    )
+                    results.append(intervals)
+                    self._continuous_index.index
             elif k == self._interval_name:
                 int_res = self._interval_index.sel({k: labels[k]}, **kwargs)
                 results.append(int_res)
-                # which_intervals = int_res.dim_indexers[self._interval_name]
-                # print(which_intervals)
-                # print(type(which_intervals))
-                # print(isinstance(which_intervals, np.integer))
-                # # can't just `int` here. was failing for int64 as returned by pandas
-                # if isinstance(which_intervals, (np.integer, int)):
-                #     interval: Any = self._interval_index.index[which_intervals]
-                #     print(interval)
-                #     # TODO: handle closed left, right both etc
-                #     cont_slice = self._continuous_index.sel(
-                #         {self._continuous_name: slice(interval.left, interval.right)}
-                #     )
-                #     results.append(cont_slice)
-                #     print(cont_slice)
-                # else:
-                #     raise NotImplementedError
+                which_intervals = int_res.dim_indexers[self._interval_name]
+                if isinstance(which_intervals, Integral):
+                    interval: Any = self._interval_index.index[which_intervals]
+                    # TODO: handle closed left, right both etc
+                    cont_slice = self._continuous_index.sel(
+                        {self._continuous_name: slice(interval.left, interval.right)}
+                    )
+                    results.append(cont_slice)
+                else:
+                    raise NotImplementedError
 
         res = merge_sel_results(results)
 
