@@ -3,6 +3,7 @@ name = "linked-indices"
 dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
+license = "BSD-3-Clause"
 authors = [{ name = "Ian Hunt-Isaak", email = "ianhuntisaak@gmail.com" }]
 requires-python = ">=3.11"
 dependencies = [
