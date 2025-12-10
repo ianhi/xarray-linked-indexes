@@ -58,20 +58,22 @@ def merge_sel_results(results: list[IndexSelResult]) -> IndexSelResult:
 class DimensionInterval(Index):
     _continuous_index: PandasIndex
     _interval_index: PandasIndex
-    _interval_label_indexes: list[PandasIndex]
+    _interval_label_indexes: dict[str, PandasIndex]
 
     def __init__(
         self,
         continuous_index: PandasIndex,
         interval_index: PandasIndex,
-        interval_label_indexes: list[PandasIndex],
+        interval_label_indexes: dict[str, PandasIndex],
         continuous_dim_name: str,
-        interval_dim_name: str,
+        interval_dim_name: str,  # technically a hashable i think
         interval_coord_name: str,
     ):
         assert isinstance(interval_index.index, pd.IntervalIndex)
         assert isinstance(continuous_index.index, pd.Index)
-        assert all([isinstance(i.index, pd.Index) for i in interval_label_indexes])
+        assert all(
+            [isinstance(i.index, pd.Index) for i in interval_label_indexes.values()]
+        )
         self._continuous_index = continuous_index
         self._interval_index = interval_index
         self._interval_label_indexes = interval_label_indexes
@@ -82,8 +84,8 @@ class DimensionInterval(Index):
 
     @classmethod
     def from_variables(cls, variables, *, options):
-        interval_dim: str = None
-        interval_coord: str = None
+        interval_dim: str | None = None
+        interval_coord: str | None = None
         dims = []
 
         vars_by_dim = defaultdict(lambda: [])
@@ -95,7 +97,9 @@ class DimensionInterval(Index):
             if isinstance(v.dtype, pd.IntervalDtype):
                 # for now assume that there is only one IntervalDtype
                 interval_coord = k
-                interval_dim = dim
+                interval_dim = str(
+                    dim
+                )  # TODO should  handle the typing of this as hashable
 
         # todo: find which coord is the interval dimension coord
         # second loop hooray!
@@ -105,19 +109,18 @@ class DimensionInterval(Index):
         # get the non-interval dim - assert must be length 1
         # below cannot be very robust. figure out a better way
         continuous_dim = dims[[d is not interval_dim for d in dims].index(True)]
-        continuous_dim
 
-        vars_by_dim
-        interval_label_indexes = []
+        interval_label_indexes = {}
         for name, var in vars_by_dim[interval_dim]:
             if name == interval_coord:
                 interval_index = PandasIndex.from_variables(
                     {name: var}, options=options
                 )
             else:
-                interval_label_indexes.append(
-                    PandasIndex.from_variables({name: var}, options=options)
+                interval_label_indexes[name] = PandasIndex.from_variables(
+                    {name: var}, options=options
                 )
+
         cont = vars_by_dim[continuous_dim]
         assert len(cont) == 1
         name, var = cont[0]
@@ -143,7 +146,7 @@ class DimensionInterval(Index):
         for index in (
             self._continuous_index,
             self._interval_index,
-            *self._interval_label_indexes,
+            *self._interval_label_indexes.values(),
         ):
             idx_variables.update(index.create_variables(variables))
 
@@ -209,11 +212,12 @@ class DimensionInterval(Index):
                 int_label_slice = follow_idx_slice
             # print("follow_idx_slice: ", follow_idx_slice)
             new_follower_index = follower_index.isel({follower_name: follow_idx_slice})
-            new_interval_label_indexes = []
-            for i, index in enumerate(self._interval_label_indexes):
-                new_interval_label_indexes.append(
-                    index.isel({self._interval_name: int_label_slice})
+            new_interval_label_indexes = {}
+            for k, index in self._interval_label_indexes.items():
+                new_interval_label_indexes[k] = index.isel(
+                    {self._interval_name: int_label_slice}
                 )
+
             return new_leader_index, new_follower_index, new_interval_label_indexes
 
         if continuous_indexer is not None and interval_indexer is not None:
@@ -223,9 +227,11 @@ class DimensionInterval(Index):
             # so do interval then do contintuous
             # can return a chained self.isel?
 
-            new_interval_index = self.isel(
-                {self._interval_coord: interval_indexer}
-            )._interval_index
+            res = self.isel({self._interval_name: interval_indexer})
+            assert res is not None
+            print(res)
+            new_interval_index = res._interval_index
+            new_interval_label_indexes = res._interval_label_indexes
             new_cont_index = self.isel(
                 {self._continuous_name: continuous_indexer}
             )._continuous_index
@@ -304,6 +310,9 @@ class DimensionInterval(Index):
         # e.g. ds.sel(time=10) . we have to pass both indexers from here. we also need to indepdently handle that case
         # inside of isel. Can probably consolidate the code for handling this in the future.
         for k in labels.keys():
+            print(k)
+            print(self._interval_label_indexes)
+            print(self._interval_coord)
             if k == self._continuous_name:
                 cont_res = self._continuous_index.sel({k: labels[k]}, **kwargs)
                 results.append(cont_res)
@@ -316,8 +325,16 @@ class DimensionInterval(Index):
                     )
                     results.append(intervals)
                     self._continuous_index.index
-            elif k == self._interval_name:
-                int_res = self._interval_index.sel({k: labels[k]}, **kwargs)
+            elif k == self._interval_coord or k in self._interval_label_indexes:
+                # print(self._interval_index)
+                # this needs to check if it's interval_dim
+                # then decide if we are slicing over a label or the raw index
+                int_index = self._interval_label_indexes.get(k, self._interval_index)
+
+                print(int_index)
+
+                int_res = int_index.sel({k: labels[k]}, **kwargs)
+                print(int_res)
                 results.append(int_res)
                 which_intervals = int_res.dim_indexers[self._interval_name]
                 if isinstance(which_intervals, Integral):
@@ -327,6 +344,12 @@ class DimensionInterval(Index):
                         {self._continuous_name: slice(interval.left, interval.right)}
                     )
                     results.append(cont_slice)
+                elif isinstance(which_intervals, slice):
+                    # e.g. ds.sel(intervals=slice(500,1500))
+                    # TODO: need to get the max and min of all teh intervals
+                    # can prob re-use the code as used in co-slice
+                    pass
+
                 else:
                     raise NotImplementedError
 
