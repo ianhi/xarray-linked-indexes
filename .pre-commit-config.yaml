@@ -1,4 +1,23 @@
 repos:
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.8
+    hooks:
+      - id: actionlint
+        files: ".github/workflows/"
+        args:
+          [
+            "-ignore",
+            "SC1090",
+            "-ignore",
+            "SC2046",
+            "-ignore",
+            "SC2086",
+            "-ignore",
+            "SC2129",
+            "-ignore",
+            "SC2155",
+          ]
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff version.
     rev: v0.14.8
