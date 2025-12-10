@@ -156,7 +156,6 @@ class DimensionInterval(Index):
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
     ) -> "DimensionInterval | None":
         # Get indexers for each dimension this index manages
-        print(indexers)
         continuous_indexer = indexers.get(self._continuous_name)
         interval_indexer = indexers.get(self._interval_name)
 
@@ -206,11 +205,9 @@ class DimensionInterval(Index):
             follow_idx_slice = follower_index.sel(
                 labels={follower_name: follow_value_slice}
             ).dim_indexers[follower_name]
-            # print(follower_name)
             if int_label_slice is None:
                 # is there a nice way to incorporate into the above if statements?
                 int_label_slice = follow_idx_slice
-            # print("follow_idx_slice: ", follow_idx_slice)
             new_follower_index = follower_index.isel({follower_name: follow_idx_slice})
             new_interval_label_indexes = {}
             for k, index in self._interval_label_indexes.items():
@@ -229,7 +226,6 @@ class DimensionInterval(Index):
 
             res = self.isel({self._interval_name: interval_indexer})
             assert res is not None
-            print(res)
             new_interval_index = res._interval_index
             new_interval_label_indexes = res._interval_label_indexes
             new_cont_index = self.isel(
@@ -310,9 +306,6 @@ class DimensionInterval(Index):
         # e.g. ds.sel(time=10) . we have to pass both indexers from here. we also need to indepdently handle that case
         # inside of isel. Can probably consolidate the code for handling this in the future.
         for k in labels.keys():
-            print(k)
-            print(self._interval_label_indexes)
-            print(self._interval_coord)
             if k == self._continuous_name:
                 cont_res = self._continuous_index.sel({k: labels[k]}, **kwargs)
                 results.append(cont_res)
@@ -326,15 +319,11 @@ class DimensionInterval(Index):
                     results.append(intervals)
                     self._continuous_index.index
             elif k == self._interval_coord or k in self._interval_label_indexes:
-                # print(self._interval_index)
                 # this needs to check if it's interval_dim
                 # then decide if we are slicing over a label or the raw index
                 int_index = self._interval_label_indexes.get(k, self._interval_index)
 
-                print(int_index)
-
                 int_res = int_index.sel({k: labels[k]}, **kwargs)
-                print(int_res)
                 results.append(int_res)
                 which_intervals = int_res.dim_indexers[self._interval_name]
                 if isinstance(which_intervals, Integral):
