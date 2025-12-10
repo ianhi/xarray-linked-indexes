@@ -142,7 +142,7 @@ class DimensionInterval(Index):
     def create_variables(self, variables):
         idx_variables = {}
 
-        # TODO what is this function for?
+        # TODO: what is this function for?
         for index in (
             self._continuous_index,
             self._interval_index,
@@ -151,6 +151,20 @@ class DimensionInterval(Index):
             idx_variables.update(index.create_variables(variables))
 
         return idx_variables
+
+    @staticmethod
+    def _interval_idx_min_max(intervals: pd.IntervalIndex | pd.Interval) -> slice:
+        """
+        return extremes of an interval or collection of intervals
+
+        TODO: handle interval closed property
+        TODO: what if intervals are disjoint?
+        """
+        if isinstance(intervals, pd.IntervalIndex):
+            follow_value_slice = slice(intervals[0].left, intervals[-1].right)
+        elif isinstance(intervals, pd.Interval):
+            follow_value_slice = slice(intervals.left, intervals.right)
+        return follow_value_slice
 
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
@@ -185,11 +199,13 @@ class DimensionInterval(Index):
             int_label_slice = None
             if isinstance(leader_index.index, pd.IntervalIndex):
                 # TODO: deal with closedness!
-                interval = leader_index.index[indexer]
-                if isinstance(interval, pd.IntervalIndex):
-                    follow_value_slice = slice(interval[0].left, interval[-1].right)
-                else:
-                    follow_value_slice = slice(interval.left, interval.right)
+                follow_value_slice = self._interval_idx_min_max(
+                    leader_index.index[indexer]
+                )
+                # if isinstance(interval, pd.IntervalIndex):
+                #     follow_value_slice = slice(interval[0].left, interval[-1].right)
+                # else:
+                #     follow_value_slice = slice(interval.left, interval.right)
                 int_label_slice = leader_slice
             else:
                 # pyright is really yelling at me here about the potential typing
@@ -305,6 +321,8 @@ class DimensionInterval(Index):
         # to a point we can't properly drop the interval coord without passing both through the indexing here
         # e.g. ds.sel(time=10) . we have to pass both indexers from here. we also need to indepdently handle that case
         # inside of isel. Can probably consolidate the code for handling this in the future.
+
+        # might be able to simplify some of the below?
         for k in labels.keys():
             if k == self._continuous_name:
                 cont_res = self._continuous_index.sel({k: labels[k]}, **kwargs)
@@ -326,22 +344,18 @@ class DimensionInterval(Index):
                 int_res = int_index.sel({k: labels[k]}, **kwargs)
                 results.append(int_res)
                 which_intervals = int_res.dim_indexers[self._interval_name]
-                if isinstance(which_intervals, Integral):
-                    interval: Any = self._interval_index.index[which_intervals]
-                    # TODO: handle closed left, right both etc
+                if isinstance(which_intervals, (Integral, slice)):
+                    intervals: Any = self._interval_index.index[which_intervals]
                     cont_slice = self._continuous_index.sel(
-                        {self._continuous_name: slice(interval.left, interval.right)}
+                        {self._continuous_name: self._interval_idx_min_max(intervals)}
                     )
                     results.append(cont_slice)
-                elif isinstance(which_intervals, slice):
-                    # e.g. ds.sel(intervals=slice(500,1500))
-                    # TODO: need to get the max and min of all teh intervals
-                    # can prob re-use the code as used in co-slice
-                    pass
-
                 else:
                     raise NotImplementedError
 
+        # TODO: i think we can remove our version of merge_sel_results this and use
+        # the standard xarray one now that we never return multiple slices for T
+        # because tragically it doesn't work because array slices must be contiguous
         res = merge_sel_results(results)
 
         return res
