@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 __all__ = ["interval_dataset"]
 
 
-def interval_dataset() -> xr.Dataset:
+def interval_dataset(interval_dim="word") -> xr.Dataset:
     T = np.arange(0, 5000, 5)
     N = T.shape[0]
     breaks = [0, N * 2 / 10, N * 5 / 10, N * 7 / 10, N * 10 / 10 - 1]
@@ -29,8 +29,8 @@ def interval_dataset() -> xr.Dataset:
         coords={
             "time": T,
             # must add enforcement that word and intervals are the same length
-            "intervals": ("word", word_intervals),
-            "word": ("word", ["green", "red", "blue", "red"]),
+            "intervals": (interval_dim, word_intervals),
+            "word": (interval_dim, ["green", "red", "blue", "red"]),
         },
     )
 

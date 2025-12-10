@@ -64,6 +64,7 @@ class DimensionInterval(Index):
         interval_index: PandasIndex,
         continuous_dim_name: str,
         interval_dim_name: str,
+        interval_coord_name: str,
     ):
         assert isinstance(interval_index.index, pd.IntervalIndex)
         assert isinstance(continuous_index.index, pd.Index)
@@ -72,6 +73,7 @@ class DimensionInterval(Index):
 
         self._continuous_name = continuous_dim_name
         self._interval_name = interval_dim_name
+        self._interval_coord = interval_coord_name
 
     @classmethod
     def from_variables(cls, variables, *, options):
@@ -86,6 +88,7 @@ class DimensionInterval(Index):
             assert v.ndim == 1
             if isinstance(v.dtype, pd.IntervalDtype):
                 i_dim = v.dims[0]
+                i_name = k
                 interval_index = PandasIndex.from_variables({k: v}, options=options)
             else:
                 c_dim = v.dims[0]
@@ -93,13 +96,14 @@ class DimensionInterval(Index):
 
         # TODO: should we be enforcing contiguousness here or allowing disjoint intervals?
         assert isinstance(i_dim, str)
+        assert isinstance(i_name, str)
         assert isinstance(c_dim, str)
         return cls(
-            # more hardocoding - TODO: improve
             continuous_index=cont_index,
             interval_index=interval_index,
             continuous_dim_name=c_dim,
             interval_dim_name=i_dim,
+            interval_coord_name=i_name,
         )
 
     def create_variables(self, variables):
@@ -167,7 +171,7 @@ class DimensionInterval(Index):
             # can return a chained self.isel?
 
             new_interval_index = self.isel(
-                {self._interval_name: interval_indexer}
+                {self._interval_coord: interval_indexer}
             )._interval_index
             new_cont_index = self.isel(
                 {self._continuous_name: continuous_indexer}
@@ -217,6 +221,7 @@ class DimensionInterval(Index):
             interval_index=new_interval_index,
             continuous_dim_name=self._continuous_name,
             interval_dim_name=self._interval_name,
+            interval_coord_name=self._interval_coord,
         )
 
     def should_add_coord_to_array(self, name, var, dims) -> bool:
