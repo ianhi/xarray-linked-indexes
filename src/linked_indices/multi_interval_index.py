@@ -75,6 +75,16 @@ class DimensionIntervalMulti(Index):
     Options:
         debug (bool): If True, print debug information during operations.
             Pass via set_xindex(..., DimensionIntervalMulti, debug=True)
+
+    Known Limitations:
+        - Intervals are assumed to be contiguous (no gaps). Disjoint intervals
+          may produce unexpected results when computing time ranges.
+        - When multiple indexers conflict (partially overlapping), we take the
+          intersection which may result in empty or minimal selections.
+        - Array indexers (fancy indexing) are not fully supported for interval
+          dimensions - only Integral and slice indexers work.
+        - The closedness of intervals (left/right/both/neither) is only partially
+          handled - see TODO comments in _interval_idx_min_max and _get_overlapping_slice.
     """
 
     _continuous_index: PandasIndex
@@ -170,7 +180,6 @@ class DimensionIntervalMulti(Index):
                         {name: var}, options=options
                     )
 
-            assert interval_index is not None
             interval_dims[dim_name] = IntervalDimInfo(
                 dim_name=dim_name,
                 coord_name=coord_name,
@@ -184,6 +193,9 @@ class DimensionIntervalMulti(Index):
                 f"\tcontinuous_dim={continuous_dim}\n"
                 f"\tinterval_dims={list(interval_dims.keys())}"
             )
+
+        # TODO: Should we be enforcing contiguousness here or allowing disjoint intervals?
+        # Currently we assume intervals are contiguous when computing time ranges.
 
         return cls(
             continuous_index=continuous_index,
@@ -222,6 +234,8 @@ class DimensionIntervalMulti(Index):
     ) -> IntervalDimInfo:
         """Apply a slice to an interval dimension, including all its label indexes."""
         new_int_index = info.interval_index.isel({info.dim_name: dim_slice})
+        # We should always get something back here because of how we constructed our slice.
+        # Also makes the typing way easier below.
         assert new_int_index is not None
 
         new_label_indexes = {}
@@ -295,11 +309,17 @@ class DimensionIntervalMulti(Index):
                 f"\tinterval_indexers={interval_indexers}"
             )
 
-        # Track the time range constraint from indexing operations
+        # Track the time range constraint from indexing operations.
+        # NOTE: time_range is over coordinate VALUES (e.g., slice(0.0, 120.0)),
+        # not array indexes. It represents the min/max time values that constrain
+        # which intervals overlap.
         time_range: slice | None = None
 
         # Handle continuous indexer first
         if continuous_indexer is not None:
+            # Convert scalar indexers to slices to preserve the dimension.
+            # We need to take special care that we don't eliminate a dim here
+            # because we can't return from isel that only one of our dims is gone.
             if isinstance(continuous_indexer, Integral):
                 cont_slice = slice(continuous_indexer, continuous_indexer + 1)
             elif isinstance(continuous_indexer, np.ndarray):
@@ -327,14 +347,26 @@ class DimensionIntervalMulti(Index):
             time_values = new_continuous_index.index
             time_range = slice(time_values.min(), time_values.max())
 
+            if self._debug:
+                print(
+                    f"DEBUG isel continuous:\n"
+                    f"\ttime_values={time_values}\n"
+                    f"\ttime_range={time_range}"
+                )
+
         # Handle interval indexers
         for dim_name, idxr in interval_indexers.items():
             info = self._interval_dims[dim_name]
 
+            # Convert scalar indexers to slices to preserve the dimension.
             if isinstance(idxr, Integral):
                 int_slice = slice(idxr, idxr + 1)
-            else:
+            elif isinstance(idxr, slice):
                 int_slice = idxr
+            else:
+                raise NotImplementedError(
+                    f"Unsupported interval indexer type: {type(idxr)}"
+                )
 
             # Update this interval dimension
             new_interval_dims[dim_name] = self._slice_interval_dim(info, int_slice)
@@ -343,7 +375,10 @@ class DimensionIntervalMulti(Index):
             selected_intervals = new_interval_dims[dim_name].interval_index.index
             interval_time_range = self._interval_idx_min_max(selected_intervals)
 
-            # Intersect with existing time_range if any
+            # Intersect with existing time_range if any.
+            # NOTE: When multiple indexers conflict (partially overlapping), we take
+            # the most restrictive approach (intersection). This may result in empty
+            # or minimal selections if the indexers don't overlap well.
             if time_range is not None:
                 time_range = slice(
                     max(time_range.start, interval_time_range.start),
@@ -395,6 +430,9 @@ class DimensionIntervalMulti(Index):
         )
 
     def should_add_coord_to_array(self, name, var, dims) -> bool:
+        # TODO: This may not be correct for all cases.
+        # This method is passed the name of the DataArray, a single coord (var),
+        # and dims of the DataArray (not the coord). We always return True for now.
         return True
 
     def sel(self, labels, method=None, tolerance=None):
