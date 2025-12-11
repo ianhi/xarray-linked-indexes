@@ -22,6 +22,12 @@ _MISSING = object()
 
 
 def merge_sel_results(results: list[IndexSelResult]) -> IndexSelResult:
+    """Merge multiple IndexSelResult objects into one.
+
+    Combines dim_indexers, indexes, variables, drop_coords, drop_indexes,
+    and rename_dims from all results. Later results override earlier ones
+    for dict fields.
+    """
     dim_indexers = {}
     indexes = {}
     variables = {}
@@ -65,14 +71,30 @@ class DimensionIntervalMulti(Index):
     Custom xarray Index supporting multiple interval dimensions over a single
     continuous dimension.
 
-    Example structure:
-        Dimensions: (time: 1000, words: 4, phonemes: 20)
-        Coordinates:
-          * time               (time) int64
-          * word_intervals     (words) interval[int64]
-          * phoneme_intervals  (phonemes) interval[int64]
+    Example repr::
 
-    When selecting on any dimension, all other dimensions are automatically
+        <xarray.Dataset>
+        Dimensions:            (C: 2, time: 1000, word: 3, phoneme: 6)
+        Coordinates:
+          * time               (time) float64 0.0 0.1201 0.2402 ... 119.9 120.0
+          * word               (word) <U5 'red' 'green' 'blue'
+          * phoneme            (phoneme) <U2 'ah' 'ee' 'oh' 'oo' 'eh' 'ih'
+          * word_intervals     (word) interval[float64, left] [0.0, 40.0) ...
+          * phoneme_intervals  (phoneme) interval[float64, left] [0.0, 20.0) ...
+          * part_of_speech     (word) <U9 'adjective' 'adjective' 'noun'
+        Dimensions without coordinates: C
+        Data variables:
+            data               (C, time) float64 ...
+        Indexes:
+          ┌ time               DimensionIntervalMulti
+          │ word_intervals
+          │ phoneme_intervals
+          │ word
+          │ part_of_speech
+          └ phoneme
+
+    When selecting on any coordinate (time, word_intervals, word, part_of_speech,
+    phoneme_intervals, or phoneme), all other dimensions are automatically
     constrained to overlapping values.
 
     Options:
@@ -106,11 +128,22 @@ class DimensionIntervalMulti(Index):
         coord_to_dim: dict[str, str] | None = None,
         label_to_dim: dict[str, str] | None = None,
     ):
-        assert isinstance(continuous_index.index, pd.Index)
-        for info in interval_dims.values():
-            assert isinstance(info.interval_index.index, pd.IntervalIndex)
-            for label_idx in info.label_indexes.values():
-                assert isinstance(label_idx.index, pd.Index)
+        if not isinstance(continuous_index.index, pd.Index):
+            raise ValueError(
+                f"continuous_index must wrap a pd.Index, got {type(continuous_index.index)}"
+            )
+        for dim_name, info in interval_dims.items():
+            if not isinstance(info.interval_index.index, pd.IntervalIndex):
+                raise ValueError(
+                    f"interval_index for '{dim_name}' must wrap a pd.IntervalIndex, "
+                    f"got {type(info.interval_index.index)}"
+                )
+            for label_name, label_idx in info.label_indexes.items():
+                if not isinstance(label_idx.index, pd.Index):
+                    raise ValueError(
+                        f"label_index '{label_name}' for '{dim_name}' must wrap a pd.Index, "
+                        f"got {type(label_idx.index)}"
+                    )
 
         self._continuous_index = continuous_index
         self._continuous_name = continuous_dim_name
@@ -147,11 +180,16 @@ class DimensionIntervalMulti(Index):
         dims = list(vars_by_dim.keys())
         if len(dims) < 2:
             raise ValueError(
-                f"Expected at least 2 dimensions (1 continuous + 1 interval), got {dims}"
+                f"Expected at least 2 dimensions (1 continuous + 1 interval), got {dims}. "
+                f"Coordinates provided: {list(variables.keys())}"
             )
         if len(interval_coords) < 1:
+            non_interval_coords = [
+                name for name in variables.keys() if name not in interval_coords
+            ]
             raise ValueError(
-                f"Expected at least 1 interval coordinate, got {interval_coords}"
+                f"Expected at least 1 interval coordinate (pd.IntervalDtype), got none. "
+                f"Non-interval coordinates found: {non_interval_coords}"
             )
         if debug:
             print(
@@ -161,11 +199,16 @@ class DimensionIntervalMulti(Index):
             )
 
         # Identify continuous dimension (the one without any interval coord)
+        # TODO: Could potentially support multiple continuous dimensions by requiring
+        # an explicit mapping of interval dims -> continuous dims, e.g.:
+        # interval_mapping = {"word": "time", "other_intervals": "time2"}
         interval_dim_names = set(interval_coords.values())
         continuous_dims = [d for d in dims if d not in interval_dim_names]
         if len(continuous_dims) != 1:
             raise ValueError(
-                f"Expected exactly one continuous dimension, got {continuous_dims}"
+                f"Expected exactly one continuous dimension, got {continuous_dims}. "
+                f"Interval dimensions: {list(interval_dim_names)}, "
+                f"all dimensions: {dims}"
             )
         continuous_dim = continuous_dims[0]
 
@@ -174,7 +217,7 @@ class DimensionIntervalMulti(Index):
             raise ValueError(
                 f"Expected one coordinate for continuous dimension, got {cont_vars}"
             )
-        ((cont_name, cont_var),) = cont_vars
+        cont_name, cont_var = cont_vars[0]
         continuous_index = PandasIndex.from_variables(
             {cont_name: cont_var}, options=options
         )
@@ -318,9 +361,43 @@ class DimensionIntervalMulti(Index):
 
         return slice(int(overlap_indices[0]), int(overlap_indices[-1]) + 1)
 
+    @staticmethod
+    def _intersect_intervals(
+        existing: pd.Interval | None, new: pd.Interval
+    ) -> pd.Interval:
+        """Intersect two time range intervals, returning the overlapping region.
+
+        Takes the maximum of left bounds and minimum of right bounds.
+        Uses the closed property from the new interval.
+        """
+        if existing is None:
+            return new
+        return pd.Interval(
+            max(existing.left, new.left),
+            min(existing.right, new.right),
+            closed=new.closed,
+        )
+
+    def _get_selected_dims(self, labels: dict) -> set[str]:
+        """Get the set of interval dimension names that are selected by the given labels."""
+        selected = set()
+        for key in labels:
+            if key in self._coord_to_dim:
+                selected.add(self._coord_to_dim[key])
+            elif key in self._label_to_dim:
+                selected.add(self._label_to_dim[key])
+        return selected
+
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
     ) -> "DimensionIntervalMulti | None":
+        """Integer/positional indexing on the dataset.
+
+        When indexing on any dimension, automatically constrains all other
+        dimensions to overlapping values based on the time range.
+
+        Returns a new DimensionIntervalMulti with updated indexes.
+        """
         # Start with current state
         new_continuous_index = self._continuous_index
         # (shallow copy - we replace entries, not mutate them)
@@ -415,15 +492,7 @@ class DimensionIntervalMulti(Index):
             # NOTE: When multiple indexers conflict (partially overlapping), we take
             # the most restrictive approach (intersection). This may result in empty
             # or minimal selections if the indexers don't overlap well.
-            if time_range is not None:
-                # Intersect intervals, preserving closed from the new interval
-                time_range = pd.Interval(
-                    max(time_range.left, interval_time_range.left),
-                    min(time_range.right, interval_time_range.right),
-                    closed=interval_time_range.closed,
-                )
-            else:
-                time_range = interval_time_range
+            time_range = self._intersect_intervals(time_range, interval_time_range)
 
         # Now constrain all dimensions based on the computed time_range
         if time_range is not None:
@@ -478,6 +547,13 @@ class DimensionIntervalMulti(Index):
         return True
 
     def sel(self, labels, method=None, tolerance=None):
+        """Label-based indexing on the dataset.
+
+        When selecting on any dimension, automatically constrains all other
+        dimensions to overlapping values based on the time range.
+
+        Returns an IndexSelResult with dim_indexers for all affected dimensions.
+        """
         if self._debug:
             print(f"DEBUG sel:\n\tlabels={labels}\n\tmethod={method}")
         results = []
@@ -485,10 +561,11 @@ class DimensionIntervalMulti(Index):
         # Track time range constraints (pd.Interval to preserve closed property)
         time_range: pd.Interval | None = None
 
-        # cannot only handle this complexity in isel, because if you select on the continuous dimension
-        # to a point we can't properly drop the interval coord without passing both through the indexing here
-        # e.g. ds.sel(time=10) . we have to pass both indexers from here. we also need to indepdently handle that case
-        # inside of isel. Can probably consolidate the code for handling this in the future.
+        # NOTE: Both sel() and isel() handle cross-dimension constraints.
+        # - sel() must return complete indexers for all dimensions so xarray can
+        #   slice the data arrays correctly (otherwise dimension sizes mismatch).
+        # - isel() must also handle it because it can be called directly by the user,
+        #   and it updates the index's internal state.
         for key, value in labels.items():
             # Check if selecting on continuous dimension, e.g. ds.sel(time=slice(0, 50))
             if key == self._continuous_name:
@@ -527,16 +604,7 @@ class DimensionIntervalMulti(Index):
                 indexer = sel_res.dim_indexers[dim_name]
                 selected_intervals = info.interval_index.index[indexer]
                 interval_time_range = self._interval_idx_min_max(selected_intervals)
-
-                # Intersect with existing time_range if multiple interval selections
-                if time_range is not None:
-                    time_range = pd.Interval(
-                        max(time_range.left, interval_time_range.left),
-                        min(time_range.right, interval_time_range.right),
-                        closed=interval_time_range.closed,
-                    )
-                else:
-                    time_range = interval_time_range
+                time_range = self._intersect_intervals(time_range, interval_time_range)
 
         # If we have a time range constraint, add selections for all dimensions
         if time_range is not None:
@@ -551,15 +619,8 @@ class DimensionIntervalMulti(Index):
                 )
                 results.append(cont_res)
 
-            # Identify which interval dimensions were already selected (O(1) lookups)
-            selected_dims = set()
-            for key in labels:
-                if key in self._coord_to_dim:
-                    selected_dims.add(self._coord_to_dim[key])
-                elif key in self._label_to_dim:
-                    selected_dims.add(self._label_to_dim[key])
-
             # Add constraints for interval dimensions not already selected
+            selected_dims = self._get_selected_dims(labels)
             for dim_name, info in self._interval_dims.items():
                 if dim_name in selected_dims:
                     continue
