@@ -17,6 +17,9 @@ __all__ = [
     "DimensionIntervalMulti",
 ]
 
+# Sentinel for .get() lookups since None is a valid hashable dim name
+_MISSING = object()
+
 
 def merge_sel_results(results: list[IndexSelResult]) -> IndexSelResult:
     dim_indexers = {}
@@ -90,6 +93,8 @@ class DimensionIntervalMulti(Index):
     _continuous_index: PandasIndex
     _continuous_name: str
     _interval_dims: dict[str, IntervalDimInfo]  # keyed by dim_name
+    _coord_to_dim: dict[str, str]  # maps interval coord name -> dim name
+    _label_to_dim: dict[str, str]  # maps label name -> dim name
     _debug: bool
 
     def __init__(
@@ -98,6 +103,8 @@ class DimensionIntervalMulti(Index):
         continuous_dim_name: str,
         interval_dims: dict[str, IntervalDimInfo],
         debug: bool = False,
+        coord_to_dim: dict[str, str] | None = None,
+        label_to_dim: dict[str, str] | None = None,
     ):
         assert isinstance(continuous_index.index, pd.Index)
         for info in interval_dims.values():
@@ -109,6 +116,17 @@ class DimensionIntervalMulti(Index):
         self._continuous_name = continuous_dim_name
         self._interval_dims = interval_dims
         self._debug = debug
+
+        # Use provided lookup maps or build them (O(1) access in sel())
+        # These don't change when slicing, so we can reuse them from parent.
+        self._coord_to_dim = coord_to_dim or {
+            info.coord_name: dim_name for dim_name, info in interval_dims.items()
+        }
+        self._label_to_dim = label_to_dim or {
+            label_name: dim_name
+            for dim_name, info in interval_dims.items()
+            for label_name in info.label_indexes
+        }
 
     @classmethod
     def from_variables(cls, variables, *, options):
@@ -310,7 +328,7 @@ class DimensionIntervalMulti(Index):
             )
 
         # Track the time range constraint from indexing operations.
-        # NOTE: time_range is over coordinate VALUES (e.g., slice(0.0, 120.0)),
+        # NOTE: time_range is over coordinate VALUES (e.g., slice(17.5, 55.1)),
         # not array indexes. It represents the min/max time values that constrain
         # which intervals overlap.
         time_range: slice | None = None
@@ -427,6 +445,8 @@ class DimensionIntervalMulti(Index):
             continuous_dim_name=self._continuous_name,
             interval_dims=new_interval_dims,
             debug=self._debug,
+            coord_to_dim=self._coord_to_dim,
+            label_to_dim=self._label_to_dim,
         )
 
     def should_add_coord_to_array(self, name, var, dims) -> bool:
@@ -443,8 +463,12 @@ class DimensionIntervalMulti(Index):
         # Track time range constraints
         time_range: slice | None = None
 
+        # cannot only handle this complexity in isel, because if you select on the continuous dimension
+        # to a point we can't properly drop the interval coord without passing both through the indexing here
+        # e.g. ds.sel(time=10) . we have to pass both indexers from here. we also need to indepdently handle that case
+        # inside of isel. Can probably consolidate the code for handling this in the future.
         for key, value in labels.items():
-            # Check if selecting on continuous dimension
+            # Check if selecting on continuous dimension, e.g. ds.sel(time=slice(0, 50))
             if key == self._continuous_name:
                 cont_res = self._continuous_index.sel(
                     {key: value}, method=method, tolerance=tolerance
@@ -460,51 +484,34 @@ class DimensionIntervalMulti(Index):
                     time_vals = self._continuous_index.index[indexer]
                     time_range = slice(time_vals.min(), time_vals.max())
 
-                continue
+            # Check if selecting on an interval coord (e.g. ds.sel(word_intervals=50))
+            # or a label coord (e.g. ds.sel(word="red") or ds.sel(part_of_speech="noun"))
+            # this `or` will grab the first one that actually works here, never overwriting each
+            # other.
+            elif (
+                dim_name := self._coord_to_dim.get(key, _MISSING)
+            ) is not _MISSING or (
+                dim_name := self._label_to_dim.get(key, _MISSING)
+            ) is not _MISSING:
+                info = self._interval_dims[dim_name]
+                # Use label index if key is a label, otherwise use interval index
+                idx = info.label_indexes.get(key, info.interval_index)
+                sel_res = idx.sel({key: value}, method=method, tolerance=tolerance)
+                results.append(sel_res)
 
-            # Check if selecting on an interval coord or label
-            for dim_name, info in self._interval_dims.items():
-                # Check if key matches this interval's coord or a label
-                if key == info.coord_name:
-                    int_res = info.interval_index.sel(
-                        {key: value}, method=method, tolerance=tolerance
+                # Get time range from selected intervals to constrain other dimensions
+                indexer = sel_res.dim_indexers[dim_name]
+                selected_intervals = info.interval_index.index[indexer]
+                interval_time_range = self._interval_idx_min_max(selected_intervals)
+
+                # Intersect with existing time_range if multiple interval selections
+                if time_range is not None:
+                    time_range = slice(
+                        max(time_range.start, interval_time_range.start),
+                        min(time_range.stop, interval_time_range.stop),
                     )
-                    results.append(int_res)
-
-                    # Get time range from selected intervals
-                    int_indexer = int_res.dim_indexers[dim_name]
-                    selected_intervals = info.interval_index.index[int_indexer]
-                    interval_time_range = self._interval_idx_min_max(selected_intervals)
-
-                    if time_range is not None:
-                        time_range = slice(
-                            max(time_range.start, interval_time_range.start),
-                            min(time_range.stop, interval_time_range.stop),
-                        )
-                    else:
-                        time_range = interval_time_range
-                    break
-
-                if key in info.label_indexes:
-                    label_idx = info.label_indexes[key]
-                    label_res = label_idx.sel(
-                        {key: value}, method=method, tolerance=tolerance
-                    )
-                    results.append(label_res)
-
-                    # Get time range from selected intervals
-                    label_indexer = label_res.dim_indexers[dim_name]
-                    selected_intervals = info.interval_index.index[label_indexer]
-                    interval_time_range = self._interval_idx_min_max(selected_intervals)
-
-                    if time_range is not None:
-                        time_range = slice(
-                            max(time_range.start, interval_time_range.start),
-                            min(time_range.stop, interval_time_range.stop),
-                        )
-                    else:
-                        time_range = interval_time_range
-                    break
+                else:
+                    time_range = interval_time_range
 
         # If we have a time range constraint, add selections for all dimensions
         if time_range is not None:
@@ -517,13 +524,17 @@ class DimensionIntervalMulti(Index):
                 )
                 results.append(cont_res)
 
+            # Identify which interval dimensions were already selected (O(1) lookups)
+            selected_dims = set()
+            for key in labels:
+                if key in self._coord_to_dim:
+                    selected_dims.add(self._coord_to_dim[key])
+                elif key in self._label_to_dim:
+                    selected_dims.add(self._label_to_dim[key])
+
             # Add constraints for interval dimensions not already selected
             for dim_name, info in self._interval_dims.items():
-                # Skip if this dimension was already selected
-                already_selected = info.coord_name in labels or any(
-                    label in labels for label in info.label_indexes
-                )
-                if already_selected:
+                if dim_name in selected_dims:
                     continue
 
                 # Find overlapping intervals
