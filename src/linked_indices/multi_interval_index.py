@@ -86,8 +86,8 @@ class DimensionIntervalMulti(Index):
           intersection which may result in empty or minimal selections.
         - Array indexers (fancy indexing) are not fully supported for interval
           dimensions - only Integral and slice indexers work.
-        - The closedness of intervals (left/right/both/neither) is only partially
-          handled - see TODO comments in _interval_idx_min_max and _get_overlapping_slice.
+        - When intersecting intervals with different closed properties (e.g., 'left'
+          vs 'both'), the closed property from the most recent interval is used.
     """
 
     _continuous_index: PandasIndex
@@ -235,16 +235,21 @@ class DimensionIntervalMulti(Index):
         return idx_variables
 
     @staticmethod
-    def _interval_idx_min_max(intervals: pd.IntervalIndex | pd.Interval) -> slice:
-        """Return extremes of an interval or collection of intervals as a slice.
+    def _interval_idx_min_max(intervals: pd.IntervalIndex | pd.Interval) -> pd.Interval:
+        """Return extremes of an interval or collection of intervals as a single Interval.
 
-        TODO: handle interval closed property
-        TODO: what if intervals are disjoint?
+        Preserves the closed property from the source intervals.
+
+        TODO: For disjoint intervals, this incorrectly returns the bounding interval
+        from the first interval's left to the last interval's right, which includes
+        gaps. Should instead return multiple intervals or handle gaps explicitly.
         """
         if isinstance(intervals, pd.IntervalIndex):
-            return slice(intervals[0].left, intervals[-1].right)
+            return pd.Interval(
+                intervals[0].left, intervals[-1].right, closed=intervals.closed
+            )
         elif isinstance(intervals, pd.Interval):
-            return slice(intervals.left, intervals.right)
+            return intervals
         raise TypeError(f"Expected IntervalIndex or Interval, got {type(intervals)}")
 
     def _slice_interval_dim(
@@ -272,18 +277,28 @@ class DimensionIntervalMulti(Index):
     def _get_overlapping_slice(
         self,
         interval_index: pd.IntervalIndex,
-        time_range: slice,
+        time_range: pd.Interval | slice,
     ) -> slice:
         """
         Find the slice of intervals that overlap with the given time range.
 
         Uses pd.IntervalIndex.overlaps() to find all intervals that have any
         overlap with the specified time range.
+
+        Args:
+            interval_index: The IntervalIndex to search for overlaps
+            time_range: Either a pd.Interval (with closed property) or a slice
+                       (for continuous dimension ranges, treated as closed='both')
         """
-        # Create an interval representing the time range
-        # Use the same closed property as the interval index to match semantics
-        closed = interval_index.closed
-        query_interval = pd.Interval(time_range.start, time_range.stop, closed=closed)
+        # Convert to pd.Interval if needed, preserving closed property
+        if isinstance(time_range, pd.Interval):
+            query_interval = time_range
+        else:
+            # For slices from continuous dimension, use 'both' since we want
+            # to include intervals that touch either boundary
+            query_interval = pd.Interval(
+                time_range.start, time_range.stop, closed="both"
+            )
 
         # Find which intervals overlap
         overlaps = interval_index.overlaps(query_interval)
@@ -292,9 +307,9 @@ class DimensionIntervalMulti(Index):
         if self._debug:
             print(
                 f"DEBUG _get_overlapping_slice:\n"
-                f"\ttime_range={time_range}\n"
+                f"\tquery_interval={query_interval}\n"
                 f"\toverlaps={overlap_indices}\n"
-                f"\tclosed={closed}"
+                f"\ttarget_closed={interval_index.closed}"
             )
 
         if len(overlap_indices) == 0:
@@ -328,10 +343,10 @@ class DimensionIntervalMulti(Index):
             )
 
         # Track the time range constraint from indexing operations.
-        # NOTE: time_range is over coordinate VALUES (e.g., slice(17.5, 55.1)),
+        # NOTE: time_range is over coordinate VALUES (e.g., Interval(17.5, 55.1)),
         # not array indexes. It represents the min/max time values that constrain
-        # which intervals overlap.
-        time_range: slice | None = None
+        # which intervals overlap. Uses pd.Interval to preserve closed property.
+        time_range: pd.Interval | None = None
 
         # Handle continuous indexer first
         if continuous_indexer is not None:
@@ -362,8 +377,11 @@ class DimensionIntervalMulti(Index):
             assert new_continuous_index is not None
 
             # Get the time range for constraining interval dimensions
+            # Use closed='both' since continuous values include both endpoints
             time_values = new_continuous_index.index
-            time_range = slice(time_values.min(), time_values.max())
+            time_range = pd.Interval(
+                time_values.min(), time_values.max(), closed="both"
+            )
 
             if self._debug:
                 print(
@@ -398,9 +416,11 @@ class DimensionIntervalMulti(Index):
             # the most restrictive approach (intersection). This may result in empty
             # or minimal selections if the indexers don't overlap well.
             if time_range is not None:
-                time_range = slice(
-                    max(time_range.start, interval_time_range.start),
-                    min(time_range.stop, interval_time_range.stop),
+                # Intersect intervals, preserving closed from the new interval
+                time_range = pd.Interval(
+                    max(time_range.left, interval_time_range.left),
+                    min(time_range.right, interval_time_range.right),
+                    closed=interval_time_range.closed,
                 )
             else:
                 time_range = interval_time_range
@@ -409,8 +429,10 @@ class DimensionIntervalMulti(Index):
         if time_range is not None:
             # Constrain continuous dimension if it wasn't explicitly indexed
             if continuous_indexer is None:
+                # Convert Interval to slice for continuous index sel()
+                time_slice = slice(time_range.left, time_range.right)
                 cont_sel_result = self._continuous_index.sel(
-                    {self._continuous_name: time_range}
+                    {self._continuous_name: time_slice}
                 )
                 cont_slice = cont_sel_result.dim_indexers[self._continuous_name]
                 new_continuous_index = self._continuous_index.isel(
@@ -460,8 +482,8 @@ class DimensionIntervalMulti(Index):
             print(f"DEBUG sel:\n\tlabels={labels}\n\tmethod={method}")
         results = []
 
-        # Track time range constraints
-        time_range: slice | None = None
+        # Track time range constraints (pd.Interval to preserve closed property)
+        time_range: pd.Interval | None = None
 
         # cannot only handle this complexity in isel, because if you select on the continuous dimension
         # to a point we can't properly drop the interval coord without passing both through the indexing here
@@ -475,14 +497,16 @@ class DimensionIntervalMulti(Index):
                 )
                 results.append(cont_res)
 
-                # Get time range from selection
+                # Get time range from selection (use closed='both' for continuous)
                 indexer = cont_res.dim_indexers[self._continuous_name]
                 if isinstance(indexer, Integral):
                     time_val = self._continuous_index.index[indexer]
-                    time_range = slice(time_val, time_val)
+                    time_range = pd.Interval(time_val, time_val, closed="both")
                 elif isinstance(indexer, slice):
                     time_vals = self._continuous_index.index[indexer]
-                    time_range = slice(time_vals.min(), time_vals.max())
+                    time_range = pd.Interval(
+                        time_vals.min(), time_vals.max(), closed="both"
+                    )
 
             # Check if selecting on an interval coord (e.g. ds.sel(word_intervals=50))
             # or a label coord (e.g. ds.sel(word="red") or ds.sel(part_of_speech="noun"))
@@ -506,9 +530,10 @@ class DimensionIntervalMulti(Index):
 
                 # Intersect with existing time_range if multiple interval selections
                 if time_range is not None:
-                    time_range = slice(
-                        max(time_range.start, interval_time_range.start),
-                        min(time_range.stop, interval_time_range.stop),
+                    time_range = pd.Interval(
+                        max(time_range.left, interval_time_range.left),
+                        min(time_range.right, interval_time_range.right),
+                        closed=interval_time_range.closed,
                     )
                 else:
                     time_range = interval_time_range
@@ -517,8 +542,10 @@ class DimensionIntervalMulti(Index):
         if time_range is not None:
             # Add continuous constraint if not already selected
             if self._continuous_name not in labels:
+                # Convert Interval to slice for continuous index sel()
+                time_slice = slice(time_range.left, time_range.right)
                 cont_res = self._continuous_index.sel(
-                    {self._continuous_name: time_range},
+                    {self._continuous_name: time_slice},
                     method=method,
                     tolerance=tolerance,
                 )

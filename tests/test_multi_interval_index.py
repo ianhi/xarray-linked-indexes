@@ -55,6 +55,67 @@ class TestMultiIntervalStructure:
 
 
 # =============================================================================
+# Error handling tests
+# =============================================================================
+
+
+class TestErrorHandling:
+    """Tests for error handling in index creation."""
+
+    def test_missing_interval_coord_raises_error(self):
+        """Setting up index without the interval coord should raise ValueError."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        # Create dataset with interval dimension but don't include interval coord in index
+        times = np.linspace(0, 100, 100)
+        word_breaks = [0.0, 50.0, 100.0]
+        word_intervals = pd.IntervalIndex.from_breaks(word_breaks, closed="left")
+
+        ds = xr.Dataset(
+            {"data": (("time",), np.random.rand(100))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["hello", "world"]),
+            },
+        )
+
+        # Try to create index without the interval coord - should fail
+        with pytest.raises(ValueError, match="Expected at least 1 interval coordinate"):
+            ds.drop_indexes(["time", "word"]).set_xindex(
+                ["time", "word"],  # missing word_intervals
+                DimensionIntervalMulti,
+            )
+
+    def test_missing_continuous_dim_raises_error(self):
+        """Setting up index without a continuous dimension should raise ValueError."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        # Create dataset with only interval dimensions (no continuous)
+        word_breaks = [0.0, 50.0, 100.0]
+        word_intervals = pd.IntervalIndex.from_breaks(word_breaks, closed="left")
+
+        ds = xr.Dataset(
+            {"data": (("word",), np.random.rand(2))},
+            coords={
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["hello", "world"]),
+            },
+        )
+
+        # Try to create index with only interval dim - should fail
+        with pytest.raises(ValueError, match="Expected at least 2 dimensions"):
+            ds.drop_indexes(["word"]).set_xindex(
+                ["word_intervals", "word"],
+                DimensionIntervalMulti,
+            )
+
+
+# =============================================================================
 # Selection on continuous dimension (time) using sel
 # =============================================================================
 
@@ -266,3 +327,18 @@ class TestCrossSlicing:
         assert result.sizes["phoneme"] == 1
         # [20, 40) overlaps [0, 40) only (since intervals are left-closed)
         assert result.sizes["word"] == 1
+
+    def test_multiple_interval_selections(self, ds_multi):
+        """Selecting multiple interval dimensions simultaneously should intersect constraints."""
+        # Select word [40, 80) and phoneme [60, 80)
+        # The intersection is time [60, 80)
+        # word [40, 80) contains time 60-80 -> 1 word
+        # phoneme [60, 80) is fully within -> 1 phoneme
+        result = ds_multi.sel(word_intervals=60, phoneme_intervals=70)
+        _ = result * 1  # force evaluation
+
+        assert result.sizes["word"] == 1
+        assert result.sizes["phoneme"] == 1
+        # Time should be constrained to the intersection [60, 80)
+        assert result["time"].min().values >= 60
+        assert result["time"].max().values <= 80
