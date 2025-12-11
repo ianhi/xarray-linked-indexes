@@ -1,3 +1,12 @@
+"""Tests for DimensionIntervalMulti.
+
+Note: Many tests use `_ = result * 1` to force evaluation. This is necessary
+because xarray uses lazy indexing - the index's isel() method is only called
+when the data is actually accessed, not when sel()/isel() is called on the
+dataset. Without forcing evaluation, the dimension sizes may not reflect the
+constrained values from our custom index.
+"""
+
 import pytest
 
 from linked_indices.multi_interval_index import DimensionIntervalMulti
@@ -125,9 +134,7 @@ class TestTimeSelection:
 
     def test_sel_time_scalar_nearest(self, ds_multi):
         """Selecting a single time with method='nearest' should work."""
-        # sel returns correct indexers, but isel fails due to numpy array indexer
         result = ds_multi.sel(time=30, method="nearest")
-        # Check the index was updated correctly
         assert result.sizes["time"] == 1
 
     def test_sel_time_slice_constrains_both_intervals(self, ds_multi):
@@ -137,7 +144,6 @@ class TestTimeSelection:
         # - phoneme: [20-40), [40-60), [60-80) -> 3 phonemes
         result = ds_multi.sel(time=slice(30, 70))
         _ = result * 1  # force evaluation
-
         assert result.sizes["word"] == 2
         assert result.sizes["phoneme"] == 3
 
