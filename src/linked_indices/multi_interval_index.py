@@ -152,6 +152,8 @@ class DimensionIntervalMulti(Index):
 
         # Use provided lookup maps or build them (O(1) access in sel())
         # These don't change when slicing, so we can reuse them from parent.
+        # probably not a necessary optimization - but I don't think it really hurts
+        # also makes the code in sel a bit simpler
         self._coord_to_dim = coord_to_dim or {
             info.coord_name: dim_name for dim_name, info in interval_dims.items()
         }
