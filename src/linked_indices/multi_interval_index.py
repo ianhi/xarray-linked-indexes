@@ -14,7 +14,7 @@ from xarray.core.indexing import IndexSelResult
 from xarray.core.variable import Variable
 
 __all__ = [
-    "DimensionIntervalMulti",
+    "DimensionInterval",
 ]
 
 # Sentinel for .get() lookups since None is a valid hashable dim name
@@ -66,7 +66,7 @@ class IntervalDimInfo:
     )  # e.g., {"word": ..., "part_of_speech": ...}
 
 
-class DimensionIntervalMulti(Index):
+class DimensionInterval(Index):
     """
     Custom xarray Index supporting multiple interval dimensions over a single
     continuous dimension.
@@ -152,6 +152,8 @@ class DimensionIntervalMulti(Index):
 
         # Use provided lookup maps or build them (O(1) access in sel())
         # These don't change when slicing, so we can reuse them from parent.
+        # probably not a necessary optimization - but I don't think it really hurts
+        # also makes the code in sel a bit simpler
         self._coord_to_dim = coord_to_dim or {
             info.coord_name: dim_name for dim_name, info in interval_dims.items()
         }
@@ -390,7 +392,7 @@ class DimensionIntervalMulti(Index):
 
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
-    ) -> "DimensionIntervalMulti | None":
+    ) -> "DimensionInterval | None":
         """Integer/positional indexing on the dataset.
 
         When indexing on any dimension, automatically constrains all other
@@ -531,7 +533,7 @@ class DimensionIntervalMulti(Index):
                     info, overlap_slice
                 )
 
-        return DimensionIntervalMulti(
+        return DimensionInterval(
             continuous_index=new_continuous_index,
             continuous_dim_name=self._continuous_name,
             interval_dims=new_interval_dims,

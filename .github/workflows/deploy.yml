@@ -6,8 +6,6 @@ on:
   push:
     # Runs on pushes targeting the default branch
     branches: [main]
-  pull_request:
-    branches: [main]
 env:
   # `BASE_URL` determines, relative to the root of the domain, the URL that your site is served from.
   # E.g., if your site lives at `https://mydomain.org/myproject`, set `BASE_URL=/myproject`.
@@ -33,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 18.x
