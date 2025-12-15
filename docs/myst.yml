@@ -13,7 +13,9 @@ project:
   toc:
     - file: index.md
     - file: multi_interval_example.ipynb
-      title: Example
+      title: IntervalIndex Example
+    - file: onset_duration_example.ipynb
+      title: Onset/Duration Example
     - file: alternatives.md
       title: Alternatives
       children:

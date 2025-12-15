@@ -59,11 +59,14 @@ class IntervalDimInfo:
     """
 
     dim_name: str  # e.g., "word"
-    coord_name: str  # e.g., "word_intervals"
+    coord_name: str  # e.g., "word_intervals" (may be synthetic if from onset/duration)
     interval_index: PandasIndex
     label_indexes: dict[str, PandasIndex] = field(
         default_factory=dict
     )  # e.g., {"word": ..., "part_of_speech": ...}
+    from_onset_duration: bool = (
+        False  # True if interval was constructed from onset/duration
+    )
 
 
 class DimensionInterval(Index):
@@ -166,9 +169,21 @@ class DimensionInterval(Index):
     @classmethod
     def from_variables(cls, variables, *, options):
         debug = options.get("debug", False) if options else False
+        # onset_duration_coords: dict mapping dim_name -> (onset_coord, duration_coord)
+        onset_duration_coords = (
+            options.get("onset_duration_coords", {}) if options else {}
+        )
+        interval_closed = options.get("interval_closed", "left") if options else "left"
+        # TODO: Support auto-detection of onset/duration pairs by naming convention
 
         vars_by_dim: dict[str, list[tuple[str, Variable]]] = defaultdict(list)
         interval_coords: dict[str, str] = {}  # coord_name -> dim_name
+        # Store pre-constructed IntervalIndex from onset/duration
+        constructed_intervals: dict[
+            str, pd.IntervalIndex
+        ] = {}  # coord_name -> IntervalIndex
+        # Track which dimensions use onset/duration format
+        onset_duration_dims: set[str] = set()
 
         # Group variables by dimension and detect interval coordinates
         for name, var in variables.items():
@@ -178,6 +193,54 @@ class DimensionInterval(Index):
 
             if isinstance(var.dtype, pd.IntervalDtype):
                 interval_coords[name] = str(dim)
+
+        # Validate onset_duration_coords and convert to IntervalIndex
+        for dim_name, (onset_coord, duration_coord) in onset_duration_coords.items():
+            # Validate that onset and duration coords were provided
+            if onset_coord not in variables:
+                raise KeyError(
+                    f"onset coordinate '{onset_coord}' not found in variables. "
+                    f"Available: {list(variables.keys())}"
+                )
+            if duration_coord not in variables:
+                raise KeyError(
+                    f"duration coordinate '{duration_coord}' not found in variables. "
+                    f"Available: {list(variables.keys())}"
+                )
+
+            onset_var = variables[onset_coord]
+            duration_var = variables[duration_coord]
+
+            # Validate dimension matches
+            if onset_var.dims[0] != dim_name:
+                raise ValueError(
+                    f"onset coordinate '{onset_coord}' has dimension '{onset_var.dims[0]}', "
+                    f"expected '{dim_name}'"
+                )
+            if duration_var.dims[0] != dim_name:
+                raise ValueError(
+                    f"duration coordinate '{duration_coord}' has dimension '{duration_var.dims[0]}', "
+                    f"expected '{dim_name}'"
+                )
+
+            # Create IntervalIndex from onset + duration
+            onset_vals = onset_var.values
+            end_vals = onset_vals + duration_var.values
+            interval_index = pd.IntervalIndex.from_arrays(
+                onset_vals, end_vals, closed=interval_closed
+            )
+
+            # Create synthetic interval coord name (internal use only)
+            interval_coord_name = f"__{dim_name}_intervals__"
+
+            # Add to interval_coords mapping
+            interval_coords[interval_coord_name] = dim_name
+
+            # Store the constructed IntervalIndex for later use
+            constructed_intervals[interval_coord_name] = interval_index
+
+            # Track that this dim uses onset/duration
+            onset_duration_dims.add(dim_name)
 
         dims = list(vars_by_dim.keys())
         if len(dims) < 2:
@@ -232,22 +295,37 @@ class DimensionInterval(Index):
 
             interval_index = None
             label_indexes: dict[str, PandasIndex] = {}
+            is_from_onset_duration = dim_name in onset_duration_dims
 
-            for name, var in dim_vars:
-                if name == coord_name:
-                    interval_index = PandasIndex.from_variables(
-                        {name: var}, options=options
-                    )
-                else:
+            # Check if we have a pre-constructed interval from onset/duration
+            if coord_name in constructed_intervals:
+                # Use pre-constructed IntervalIndex from onset/duration
+                idx = constructed_intervals[coord_name]
+                interval_index = PandasIndex(idx, dim_name)
+
+                # All coords on this dimension become label_indexes
+                for name, var in dim_vars:
                     label_indexes[name] = PandasIndex.from_variables(
                         {name: var}, options=options
                     )
+            else:
+                # Use existing IntervalIndex from variable (original behavior)
+                for name, var in dim_vars:
+                    if name == coord_name:
+                        interval_index = PandasIndex.from_variables(
+                            {name: var}, options=options
+                        )
+                    else:
+                        label_indexes[name] = PandasIndex.from_variables(
+                            {name: var}, options=options
+                        )
 
             interval_dims[dim_name] = IntervalDimInfo(
                 dim_name=dim_name,
                 coord_name=coord_name,
                 interval_index=interval_index,
                 label_indexes=label_indexes,
+                from_onset_duration=is_from_onset_duration,
             )
 
         if debug:
@@ -273,7 +351,11 @@ class DimensionInterval(Index):
         idx_variables.update(self._continuous_index.create_variables(variables))
 
         for info in self._interval_dims.values():
-            idx_variables.update(info.interval_index.create_variables(variables))
+            # Only create interval variable if NOT from onset/duration
+            # (onset/duration uses a synthetic internal interval coord that shouldn't be exposed)
+            if not info.from_onset_duration:
+                idx_variables.update(info.interval_index.create_variables(variables))
+            # Always create label variables (includes onset/duration coords)
             for label_idx in info.label_indexes.values():
                 idx_variables.update(label_idx.create_variables(variables))
 
@@ -317,6 +399,7 @@ class DimensionInterval(Index):
             coord_name=info.coord_name,
             interval_index=new_int_index,
             label_indexes=new_label_indexes,
+            from_onset_duration=info.from_onset_duration,
         )
 
     def _get_overlapping_slice(

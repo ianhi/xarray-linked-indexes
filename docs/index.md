@@ -53,6 +53,24 @@ Now selecting on any dimension automatically constrains all other dimensions to 
 ds.sel(word="red")
 ```
 
+## Using onset/duration format
+
+As an alternative to creating `pd.IntervalIndex` objects, you can use onset/duration coordinates directly. This is useful when your data comes from annotation tools that export onset + duration format.
+
+```python
+ds = ds.drop_indexes(["time", "word"]).set_xindex(
+    ["time", "word_onset", "word_duration", "word"],
+    DimensionInterval,
+    onset_duration_coords={"word": ("word_onset", "word_duration")},
+)
+```
+
+**Options:**
+- `onset_duration_coords`: Dict mapping dimension names to `(onset_coord, duration_coord)` tuples
+- `interval_closed`: How intervals are closed (`"left"`, `"right"`, `"both"`, `"neither"`). Default: `"left"`
+
+See the [Onset/Duration Example](onset_duration_example.ipynb) notebook for a detailed walkthrough.
+
 ## Examples
 
 See the [example notebook](multi_interval_example.ipynb) for a detailed walkthrough of multiple interval types (words, phonemes) over a shared continuous time dimension.
@@ -69,5 +87,5 @@ The main index class for linking multiple interval dimensions over a single cont
 - Works with both `sel()` and `isel()` operations
 
 **Known Limitations:**
-- Intervals are assumed to be contiguous (no gaps)
 - Array indexers (fancy indexing) not fully supported for interval dimensions
+- Non-contiguous intervals (gaps) are supported but may produce unexpected results when computing time ranges that span multiple intervals

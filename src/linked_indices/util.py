@@ -4,7 +4,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 
 
-__all__ = ["interval_dataset", "multi_interval_dataset"]
+__all__ = ["interval_dataset", "multi_interval_dataset", "onset_duration_dataset"]
 
 
 def interval_dataset(interval_dim="word") -> xr.Dataset:
@@ -81,6 +81,65 @@ def multi_interval_dataset() -> xr.Dataset:
             "word": ("word", word_labels),
             "part_of_speech": ("word", word_pos),
             "phoneme_intervals": ("phoneme", phoneme_intervals),
+            "phoneme": ("phoneme", phoneme_labels),
+        },
+    )
+
+    return ds
+
+
+def onset_duration_dataset() -> xr.Dataset:
+    """
+    Create a dataset using onset/duration format instead of pd.IntervalIndex.
+
+    Uses floats and non-contiguous intervals (with gaps) for testing.
+
+    Structure:
+        Dimensions: (time: 1000, word: 3, phoneme: 5)
+        Coordinates:
+          * time               (time) float64
+          * word_onset         (word) float64
+          * word_duration      (word) float64
+          * word               (word) str  # dimension coord
+          * phoneme_onset      (phoneme) float64
+          * phoneme_duration   (phoneme) float64
+          * phoneme            (phoneme) str  # dimension coord
+
+    The intervals (computed from onset+duration) are:
+        word: [0.0, 35.5), [40.0, 75.5), [80.0, 115.5)  (3 words with gaps)
+        phoneme: [0.0, 15.5), [20.0, 35.5), [40.0, 55.5), [60.0, 75.5), [80.0, 95.5)
+
+    Note: Non-contiguous intervals have gaps between them:
+        - Gap between word 0 and 1: [35.5, 40.0)
+        - Gap between word 1 and 2: [75.5, 80.0)
+    """
+    C = 2
+    N = 1000
+    times = np.linspace(0, 120, N)
+
+    # Word onset/duration - 3 words with float boundaries and gaps
+    word_onsets = np.array([0.0, 40.0, 80.0])
+    word_durations = np.array([35.5, 35.5, 35.5])  # ends at 35.5, 75.5, 115.5
+    word_labels = ["hello", "world", "test"]
+
+    # Phoneme onset/duration - 5 phonemes with float boundaries and gaps
+    phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0])
+    phoneme_durations = np.array(
+        [15.5, 15.5, 15.5, 15.5, 15.5]
+    )  # ends at 15.5, 35.5, etc.
+    phoneme_labels = ["hh", "eh", "ll", "ow", "ld"]
+
+    data = np.random.rand(C, N)
+
+    ds = xr.Dataset(
+        {"data": (("C", "time"), data)},
+        coords={
+            "time": times,
+            "word_onset": ("word", word_onsets),
+            "word_duration": ("word", word_durations),
+            "word": ("word", word_labels),
+            "phoneme_onset": ("phoneme", phoneme_onsets),
+            "phoneme_duration": ("phoneme", phoneme_durations),
             "phoneme": ("phoneme", phoneme_labels),
         },
     )
