@@ -13,9 +13,7 @@ project:
   toc:
     - file: index.md
     - file: multi_interval_example.ipynb
-      title: Multi-Interval Index
-    - file: DimensionInterval.ipynb
-      title: Dimension Interval
+      title: Example
     - file: alternatives.md
       title: Alternatives
       children:

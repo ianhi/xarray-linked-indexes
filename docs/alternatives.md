@@ -6,9 +6,7 @@ kernelspec:
 
 # Alternatives
 
-Before reaching for a custom xarray Index, it's worth considering simpler approaches. This page compares different strategies for representing interval-based metadata alongside continuous time series data.
-
-## The Problem
+There are two alternative solutions already built into xarray for solving the problems of this package.
 
 You have time series data with metadata that spans intervals of time (e.g., words spoken during a recording). You want to:
 
@@ -16,29 +14,28 @@ You have time series data with metadata that spans intervals of time (e.g., word
 2. Select data by metadata (e.g., "give me all data during word X")
 3. Keep the time and metadata dimensions synchronized
 
-## Approach Comparison
-
 | Approach | Pros | Cons |
 |----------|------|------|
-| [**MultiIndex**](alt-multiindex.ipynb) | Built-in pandas/xarray support; familiar API | Awkward slicing behavior; duplicates time values; can't easily get interval boundaries |
 | [**Direct Coords**](alt-direct-coords.ipynb) | Simple to understand; works with standard xarray | Must construct dense arrays; loses interval boundary info; no `isel` by metadata |
+| [**MultiIndex**](alt-multiindex.ipynb) | Built-in pandas/xarray support; familiar API | Awkward slicing behavior; duplicates time values; can't easily get interval boundaries |
 | **Linked Indices** (this library) | Preserves interval structure; automatic cross-slicing; natural representation | Requires custom Index; newer xarray feature |
 
-## When to Use Each
 
-### Use MultiIndex when:
+If either of multindex or direct coords works for you use case then you should prefer to use them over this custom index.
+
+
+## Use MultiIndex when:
 - You're already familiar with pandas MultiIndex
 - Your intervals perfectly tile the time axis (no gaps)
 - You don't need to query interval boundaries
 
-### Use Direct Coords when:
+## Use Direct Coords when:
 - You have simple, non-overlapping intervals
 - You don't need `isel` access by metadata
 - You want to avoid dependencies
 
-### Use Linked Indices when:
+## Use Linked Indices when:
 - You need to preserve interval boundary information
-- You want automatic cross-slicing between dimensions
 - You have hierarchical intervals (e.g., words containing phonemes)
 - You need natural `sel()` and `isel()` on both time and metadata
 

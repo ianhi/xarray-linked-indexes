@@ -12,6 +12,9 @@ Custom xarray indexes for keeping multiple coordinates in sync across shared dim
 
 This library provides custom [xarray Index](https://docs.xarray.dev/en/stable/internals/how-to-create-custom-index.html) implementations that automatically constrain related dimensions when you select on any one of them.
 
+
+
+
 ### Use Cases
 
 - **Speech/audio data** with hierarchical annotations (words, phonemes, time)
@@ -36,7 +39,7 @@ pip install -e .
 
 ```{code-cell} python
 from linked_indices.util import multi_interval_dataset
-from linked_indices import DimensionIntervalMulti
+from linked_indices import DimensionInterval
 
 # Load example dataset with time, words, and phonemes
 ds = multi_interval_dataset()
@@ -44,7 +47,7 @@ ds = multi_interval_dataset()
 # Apply the linked index
 ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
     ["time", "word_intervals", "phoneme_intervals", "word", "part_of_speech", "phoneme"],
-    DimensionIntervalMulti,
+    DimensionInterval,
 )
 ds
 ```
@@ -58,14 +61,11 @@ ds.sel(word="red")
 
 ## Examples
 
-See the example notebooks in the sidebar:
-
-- [Multi-Interval Index](multi_interval_example.ipynb) - Multiple interval types (words, phonemes) over a shared continuous dimension
-- [Dimension Interval](DimensionInterval.ipynb) - Single interval dimension linked to continuous time
+See the [example notebook](multi_interval_example.ipynb) for a detailed walkthrough of multiple interval types (words, phonemes) over a shared continuous time dimension.
 
 ## API Reference
 
-### DimensionIntervalMulti
+### DimensionInterval
 
 The main index class for linking multiple interval dimensions over a single continuous dimension.
 
