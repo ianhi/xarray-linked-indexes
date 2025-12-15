@@ -21,7 +21,7 @@ You have time series data with metadata that spans intervals of time (e.g., word
 | **Linked Indices** (this library) | Preserves interval structure; automatic cross-slicing; natural representation | Requires custom Index; newer xarray feature |
 
 
-If either of multindex or direct coords works for you use case then you should prefer to use them over this custom index.
+If either of MultiIndex or direct coords works for your use case then you should prefer to use them over this custom index.
 
 
 ## Use MultiIndex when:

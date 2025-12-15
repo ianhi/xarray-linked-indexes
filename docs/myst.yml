@@ -27,6 +27,7 @@ site:
   options:
     hide_toc: false
     logo: logo-wide.png
+    favicon: logo.png
   nav:
     - title: GitHub
       url: https://github.com/ianhi/xarray-linked-indexes

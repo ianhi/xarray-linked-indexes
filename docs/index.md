@@ -13,8 +13,6 @@ Custom xarray indexes for keeping multiple coordinates in sync across shared dim
 This library provides custom [xarray Index](https://docs.xarray.dev/en/stable/internals/how-to-create-custom-index.html) implementations that automatically constrain related dimensions when you select on any one of them.
 
 
-
-
 ### Use Cases
 
 - **Speech/audio data** with hierarchical annotations (words, phonemes, time)
@@ -23,16 +21,12 @@ This library provides custom [xarray Index](https://docs.xarray.dev/en/stable/in
 
 ## Installation
 
-```bash
+<!-- ```bash
 pip install linked-indices
-```
-
-Or install from source:
+``` -->
 
 ```bash
-git clone https://github.com/ianhi/xarray-linked-indexes
-cd xarray-linked-indexes
-pip install -e .
+pip install git+https://github.com/ianhi/xarray-linked-indexes
 ```
 
 ## Quick Start
