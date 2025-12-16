@@ -85,12 +85,11 @@ def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
     0    0.0       2.5  hello   interjection
     1    3.0       2.5  world           noun
     2    6.0       3.5   test           noun
-    >>> phonemes
+    >>> phonemes.head(3)
        onset  duration phoneme
     0    0.0       0.8      hh
     1    0.8       0.9      eh
     2    1.7       0.8       l
-    ...
     """
     # Word-level annotations
     word_data = [
@@ -254,15 +253,12 @@ def intervals_from_dataframe(
     >>> from linked_indices.example_data import speech_annotations, intervals_from_dataframe
     >>> df = speech_annotations()
     >>> ds = intervals_from_dataframe(df, "word")
-    >>> ds
-    <xarray.Dataset>
-    Dimensions:        (word: 4)
-    Coordinates:
-      * word           (word) object 'hello' 'world' 'how' 'are'
-        word_onset     (word) float64 0.5 2.1 4.5 7.0
-        word_duration  (word) float64 1.2 1.8 2.0 2.5
-    Data variables:
-        *empty*
+    >>> list(ds.dims)
+    ['word']
+    >>> sorted(ds.coords)
+    ['word', 'word_duration', 'word_onset']
+    >>> ds.word.values
+    array(['hello', 'world', 'how', 'are'], dtype=object)
 
     Multiple annotation levels can be merged:
 
@@ -350,17 +346,17 @@ def intervals_from_long_dataframe(
     Notes
     -----
     This is equivalent to calling `intervals_from_dataframe` for each event type
-    and merging the results:
+    and merging the results::
 
-    >>> import xarray as xr
-    >>> datasets = []
-    >>> for event_type in df[event_type_col].unique():
-    ...     subset = df[df[event_type_col] == event_type]
-    ...     ds_subset = intervals_from_dataframe(
-    ...         subset, dim_name=event_type, label_col=label_col
-    ...     )
-    ...     datasets.append(ds_subset)
-    >>> ds = xr.merge(datasets)
+        import xarray as xr
+        datasets = []
+        for event_type in df["event_type"].unique():
+            subset = df[df["event_type"] == event_type]
+            ds_subset = intervals_from_dataframe(
+                subset, dim_name=event_type, label_col="label"
+            )
+            datasets.append(ds_subset)
+        ds = xr.merge(datasets)
     """
     import xarray as xr
 
