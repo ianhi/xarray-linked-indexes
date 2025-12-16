@@ -8,6 +8,8 @@ kernelspec:
 
 Custom xarray indexes for keeping multiple coordinates in sync across shared dimensions.
 
+[![Netlify Status](https://api.netlify.com/api/v1/badges/YOUR_SITE_ID/deploy-status)](https://app.netlify.com/sites/YOUR_SITE_NAME/deploys)
+
 ## Overview
 
 This library provides custom [xarray Index](https://docs.xarray.dev/en/stable/internals/how-to-create-custom-index.html) implementations that automatically constrain related dimensions when you select on any one of them.
