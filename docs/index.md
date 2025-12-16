@@ -32,7 +32,7 @@ pip install git+https://github.com/ianhi/xarray-linked-indexes
 ## Quick Start
 
 ```{code-cell} python
-from linked_indices.util import multi_interval_dataset
+from linked_indices.example_data import multi_interval_dataset
 from linked_indices import DimensionInterval
 
 # Load example dataset with time, words, and phonemes
