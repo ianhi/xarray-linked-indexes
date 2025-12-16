@@ -1,0 +1,8 @@
+[build]
+  base = "docs"
+  command = "npm install -g mystmd && myst build --html"
+  publish = "_build/html"
+
+[build.environment]
+  NODE_VERSION = "20"
+
