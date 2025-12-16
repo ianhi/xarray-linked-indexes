@@ -16,6 +16,10 @@ project:
       title: IntervalIndex Example
     - file: onset_duration_example.ipynb
       title: Onset/Duration Example
+    - title: Gallery
+      children:
+        - file: cell_hierarchy_example.ipynb
+          title: Cell Hierarchy
     - file: alternatives.md
       title: Alternatives
       children:
