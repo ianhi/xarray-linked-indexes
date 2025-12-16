@@ -22,5 +22,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
-      - name: Run tests
-        run: uv run pytest -v
+      - name: Run tests with coverage
+        run: uv run pytest -v --cov --cov-branch --cov-report=xml
+
+      - name: Run doctests
+        run: uv run python -m doctest src/linked_indices/example_data.py -v
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

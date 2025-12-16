@@ -29,6 +29,7 @@ dev = [
   "netcdf4>=1.7.3",
   "pooch>=1.8.2",
   "pytest>=9.0.2",
+  "pytest-cov>=7.0.0",
   "ruff>=0.14.8",
   "scipy>=1.16.3",
   "zarr>=3.1.5",

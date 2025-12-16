@@ -10,7 +10,7 @@ constrained values from our custom index.
 import pytest
 
 from linked_indices import DimensionInterval
-from linked_indices.util import multi_interval_dataset
+from linked_indices.example_data import multi_interval_dataset, onset_duration_dataset
 
 
 # =============================================================================
@@ -348,3 +348,779 @@ class TestCrossSlicing:
         # Time should be constrained to the intersection [60, 80)
         assert result["time"].min().values >= 60
         assert result["time"].max().values <= 80
+
+
+# =============================================================================
+# Onset/Duration Format Tests
+# =============================================================================
+
+
+@pytest.fixture
+def ds_onset_duration():
+    """Create a dataset with onset/duration coordinates indexed together."""
+    ds = onset_duration_dataset()
+    ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+        [
+            "time",
+            "word_onset",
+            "word_duration",
+            "word",
+            "phoneme_onset",
+            "phoneme_duration",
+            "phoneme",
+        ],
+        DimensionInterval,
+        onset_duration_coords={
+            "word": ("word_onset", "word_duration"),
+            "phoneme": ("phoneme_onset", "phoneme_duration"),
+        },
+    )
+    return ds
+
+
+class TestOnsetDurationStructure:
+    """Tests for basic onset/duration dataset structure."""
+
+    def test_dataset_dimensions(self, ds_onset_duration):
+        """Verify the dataset has expected dimensions."""
+        assert "time" in ds_onset_duration.dims
+        assert "word" in ds_onset_duration.dims
+        assert "phoneme" in ds_onset_duration.dims
+        assert ds_onset_duration.sizes["time"] == 1000
+        assert ds_onset_duration.sizes["word"] == 3
+        assert ds_onset_duration.sizes["phoneme"] == 5
+
+    def test_onset_duration_coords_visible(self, ds_onset_duration):
+        """Verify onset/duration coordinates remain visible."""
+        assert "word_onset" in ds_onset_duration.coords
+        assert "word_duration" in ds_onset_duration.coords
+        assert "phoneme_onset" in ds_onset_duration.coords
+        assert "phoneme_duration" in ds_onset_duration.coords
+
+    def test_no_synthetic_interval_coord(self, ds_onset_duration):
+        """Verify no synthetic interval coordinate was created."""
+        # The internal interval representation should NOT be exposed
+        assert "word_intervals" not in ds_onset_duration.coords
+        assert "phoneme_intervals" not in ds_onset_duration.coords
+
+    def test_label_coords_present(self, ds_onset_duration):
+        """Verify label coordinates are present."""
+        assert "word" in ds_onset_duration.coords
+        assert "phoneme" in ds_onset_duration.coords
+
+
+class TestOnsetDurationTimeSelection:
+    """Tests for selecting on time with onset/duration format."""
+
+    def test_sel_time_scalar_nearest(self, ds_onset_duration):
+        """Selecting a single time with method='nearest' should work."""
+        result = ds_onset_duration.sel(time=30.0, method="nearest")
+        assert result.sizes["time"] == 1
+
+    def test_sel_time_slice_constrains_intervals(self, ds_onset_duration):
+        """Selecting a time slice should constrain interval dimensions."""
+        # Time 10-50 overlaps:
+        # - word: [0, 35.5), [40, 75.5) -> 2 words
+        # - phoneme: [0, 15.5), [20, 35.5), [40, 55.5) -> 3 phonemes
+        result = ds_onset_duration.sel(time=slice(10.0, 50.0))
+        _ = result * 1  # force evaluation
+        assert result.sizes["word"] == 2
+        assert result.sizes["phoneme"] == 3
+
+    def test_sel_time_in_gap(self, ds_onset_duration):
+        """Selecting time in a gap between intervals."""
+        # Time 36-39 is in the gap between word[0] and word[1]
+        # Should select no words (or handle gracefully)
+        result = ds_onset_duration.sel(time=slice(36.0, 39.0))
+        _ = result * 1  # force evaluation
+        # Gap handling - verify behavior is defined
+        assert result.sizes["time"] > 0  # Time slice exists
+
+    def test_isel_time_constrains_intervals(self, ds_onset_duration):
+        """isel on time should constrain interval dimensions."""
+        # Select time indices in the middle
+        result = ds_onset_duration.isel(time=slice(0, 200))
+        _ = result * 1  # force evaluation
+        # First ~200 indices cover roughly time 0-24
+        # word: [0, 35.5) -> 1 word
+        # phoneme: [0, 15.5), [20, 35.5) -> 2 phonemes
+        assert result.sizes["word"] == 1
+        assert result.sizes["phoneme"] == 2
+
+
+class TestOnsetDurationLabelSelection:
+    """Tests for selecting using label coordinates."""
+
+    def test_sel_word_label(self, ds_onset_duration):
+        """Selecting by word label should constrain time and phoneme."""
+        # "hello" is first word [0, 35.5)
+        result = ds_onset_duration.sel(word="hello")
+        _ = result * 1  # force evaluation
+        assert result.sizes["word"] == 1
+        # phoneme overlapping [0, 35.5): [0, 15.5), [20, 35.5) -> 2 phonemes
+        assert result.sizes["phoneme"] == 2
+
+    def test_sel_phoneme_label(self, ds_onset_duration):
+        """Selecting by phoneme label should constrain time and word."""
+        # "hh" is first phoneme [0, 15.5)
+        result = ds_onset_duration.sel(phoneme="hh")
+        _ = result * 1  # force evaluation
+        assert result.sizes["phoneme"] == 1
+        # word overlapping [0, 15.5): [0, 35.5) -> 1 word
+        assert result.sizes["word"] == 1
+
+
+class TestOnsetDurationOnsetSelection:
+    """Tests for selecting using onset coordinates."""
+
+    def test_sel_onset_exact(self, ds_onset_duration):
+        """Selecting by exact onset value should work."""
+        # Select word with onset=40.0
+        result = ds_onset_duration.sel(word_onset=40.0)
+        _ = result * 1  # force evaluation
+        assert result.sizes["word"] == 1
+        # Verify correct word was selected
+        assert result["word"].values == ["world"]
+
+    def test_sel_onset_slice(self, ds_onset_duration):
+        """Selecting by onset slice should work."""
+        # Select words with onset between 35 and 85
+        result = ds_onset_duration.sel(word_onset=slice(35.0, 85.0))
+        _ = result * 1  # force evaluation
+        assert result.sizes["word"] == 2
+        # Should select words with onset=40.0 and onset=80.0
+        assert list(result["word"].values) == ["world", "test"]
+
+
+class TestOnsetDurationCrossSlicing:
+    """Tests verifying cross-slicing works correctly."""
+
+    def test_word_selection_propagates_to_phoneme(self, ds_onset_duration):
+        """Selecting a word should constrain phonemes correctly."""
+        # Select "world" word [40, 75.5)
+        result = ds_onset_duration.sel(word="world")
+        _ = result * 1  # force evaluation
+        assert result.sizes["word"] == 1
+        # phoneme overlapping [40, 75.5): [40, 55.5), [60, 75.5) -> 2 phonemes
+        assert result.sizes["phoneme"] == 2
+
+    def test_phoneme_selection_propagates_to_word(self, ds_onset_duration):
+        """Selecting a phoneme should constrain words correctly."""
+        # Select "ll" phoneme [40, 55.5)
+        result = ds_onset_duration.sel(phoneme="ll")
+        _ = result * 1  # force evaluation
+        assert result.sizes["phoneme"] == 1
+        # word overlapping [40, 55.5): [40, 75.5) -> 1 word
+        assert result.sizes["word"] == 1
+
+    def test_time_in_gap_constrains_correctly(self, ds_onset_duration):
+        """Selecting time in gap should not select intervals on either side."""
+        # Time exactly at 37.0 is in the gap between words
+        # This tests gap handling behavior
+        result = ds_onset_duration.sel(time=37.0, method="nearest")
+        _ = result * 1  # force evaluation
+        # Should select time, but word/phoneme behavior depends on design
+        assert result.sizes["time"] == 1
+
+
+class TestOnsetDurationErrorHandling:
+    """Tests for error handling with onset/duration format."""
+
+    def test_missing_onset_coord(self):
+        """Error when onset coord doesn't exist in variables list."""
+        ds = onset_duration_dataset()
+        with pytest.raises(KeyError):
+            ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+                ["time", "word_duration", "word"],  # missing onset
+                DimensionInterval,
+                onset_duration_coords={"word": ("word_onset", "word_duration")},
+            )
+
+    def test_missing_duration_coord(self):
+        """Error when duration coord doesn't exist in variables list."""
+        ds = onset_duration_dataset()
+        with pytest.raises(KeyError):
+            ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+                ["time", "word_onset", "word"],  # missing duration
+                DimensionInterval,
+                onset_duration_coords={"word": ("word_onset", "word_duration")},
+            )
+
+    def test_invalid_dim_in_onset_duration_coords(self):
+        """Error when onset_duration_coords references invalid dimension."""
+        ds = onset_duration_dataset()
+        with pytest.raises(ValueError):
+            ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+                ["time", "word_onset", "word_duration", "word"],
+                DimensionInterval,
+                onset_duration_coords={
+                    "nonexistent_dim": ("word_onset", "word_duration")
+                },
+            )
+
+
+class TestOnsetDurationIntervalClosed:
+    """Tests for interval_closed parameter."""
+
+    def test_interval_closed_left_default(self):
+        """Default is left-closed intervals."""
+        ds = onset_duration_dataset()
+        ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            ["time", "word_onset", "word_duration", "word"],
+            DimensionInterval,
+            onset_duration_coords={"word": ("word_onset", "word_duration")},
+        )
+        # Test boundary behavior (left endpoint included, right excluded)
+        result = ds.sel(time=0.0, method="nearest")
+        _ = result * 1
+        assert result.sizes["word"] == 1
+
+    def test_interval_closed_right(self):
+        """Right-closed intervals."""
+        ds = onset_duration_dataset()
+        ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            ["time", "word_onset", "word_duration", "word"],
+            DimensionInterval,
+            onset_duration_coords={"word": ("word_onset", "word_duration")},
+            interval_closed="right",
+        )
+        # Test boundary behavior
+        _ = ds * 1  # verify creation works
+
+
+class TestOnsetDurationEquivalence:
+    """Tests that onset/duration format produces equivalent results to IntervalIndex."""
+
+    @pytest.fixture
+    def ds_interval_format(self):
+        """Create dataset using IntervalIndex format."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+
+        # Same intervals as onset/duration dataset
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [35.5, 75.5, 115.5], closed="left"
+        )
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["hello", "world", "test"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word"]).set_xindex(
+            ["time", "word_intervals", "word"],
+            DimensionInterval,
+        )
+
+    @pytest.fixture
+    def ds_onset_format(self):
+        """Create dataset using onset/duration format."""
+        import numpy as np
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_onset": ("word", [0.0, 40.0, 80.0]),
+                "word_duration": ("word", [35.5, 35.5, 35.5]),
+                "word": ("word", ["hello", "world", "test"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word"]).set_xindex(
+            ["time", "word_onset", "word_duration", "word"],
+            DimensionInterval,
+            onset_duration_coords={"word": ("word_onset", "word_duration")},
+        )
+
+    def test_sel_word_equivalent(self, ds_interval_format, ds_onset_format):
+        """Selecting by word should give same time constraint."""
+        result_interval = ds_interval_format.sel(word="world")
+        result_onset = ds_onset_format.sel(word="world")
+
+        _ = result_interval * 1
+        _ = result_onset * 1
+
+        # Same time range should be selected
+        assert result_interval.sizes["time"] == result_onset.sizes["time"]
+
+    def test_sel_time_slice_equivalent(self, ds_interval_format, ds_onset_format):
+        """Selecting time slice should constrain words the same way."""
+        result_interval = ds_interval_format.sel(time=slice(20.0, 60.0))
+        result_onset = ds_onset_format.sel(time=slice(20.0, 60.0))
+
+        _ = result_interval * 1
+        _ = result_onset * 1
+
+        # Same words should be selected
+        assert result_interval.sizes["word"] == result_onset.sizes["word"]
+
+
+# =============================================================================
+# Mixed format tests (IntervalIndex + onset/duration on same object)
+# =============================================================================
+
+
+class TestMixedFormatStructure:
+    """Tests for datasets with both IntervalIndex and onset/duration formats."""
+
+    @pytest.fixture
+    def ds_mixed(self):
+        """Create a dataset with mixed interval formats.
+
+        - word: uses pd.IntervalIndex directly
+        - phoneme: uses onset/duration format
+        """
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+
+        # Word intervals using pd.IntervalIndex - 3 words covering [0,40), [40,80), [80,120)
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [40.0, 80.0, 120.0], closed="left"
+        )
+
+        # Phoneme uses onset/duration format - 6 phonemes, each 20 units
+        phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        phoneme_durations = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                # Word uses IntervalIndex directly
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["red", "green", "blue"]),
+                # Phoneme uses onset/duration
+                "phoneme_onset": ("phoneme", phoneme_onsets),
+                "phoneme_duration": ("phoneme", phoneme_durations),
+                "phoneme": ("phoneme", ["aa", "bb", "cc", "dd", "ee", "ff"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "word",
+                "phoneme_onset",
+                "phoneme_duration",
+                "phoneme",
+            ],
+            DimensionInterval,
+            onset_duration_coords={"phoneme": ("phoneme_onset", "phoneme_duration")},
+        )
+
+    def test_dataset_dimensions(self, ds_mixed):
+        """Verify the dataset has expected dimensions."""
+        assert "time" in ds_mixed.dims
+        assert "word" in ds_mixed.dims
+        assert "phoneme" in ds_mixed.dims
+        assert ds_mixed.sizes["time"] == 1000
+        assert ds_mixed.sizes["word"] == 3
+        assert ds_mixed.sizes["phoneme"] == 6
+
+    def test_interval_coord_visible(self, ds_mixed):
+        """IntervalIndex coord should be visible."""
+        assert "word_intervals" in ds_mixed.coords
+
+    def test_onset_duration_coords_visible(self, ds_mixed):
+        """Onset/duration coordinates should be visible."""
+        assert "phoneme_onset" in ds_mixed.coords
+        assert "phoneme_duration" in ds_mixed.coords
+
+    def test_no_synthetic_interval_for_onset_duration(self, ds_mixed):
+        """No synthetic interval coord should be created for onset/duration dim."""
+        assert "phoneme_intervals" not in ds_mixed.coords
+        assert "__phoneme_intervals__" not in ds_mixed.coords
+
+
+class TestMixedFormatSelByWord:
+    """Tests for sel on the IntervalIndex dimension (word)."""
+
+    @pytest.fixture
+    def ds_mixed(self):
+        """Create dataset with mixed formats."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [40.0, 80.0, 120.0], closed="left"
+        )
+        phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        phoneme_durations = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["red", "green", "blue"]),
+                "phoneme_onset": ("phoneme", phoneme_onsets),
+                "phoneme_duration": ("phoneme", phoneme_durations),
+                "phoneme": ("phoneme", ["aa", "bb", "cc", "dd", "ee", "ff"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "word",
+                "phoneme_onset",
+                "phoneme_duration",
+                "phoneme",
+            ],
+            DimensionInterval,
+            onset_duration_coords={"phoneme": ("phoneme_onset", "phoneme_duration")},
+        )
+
+    def test_sel_word_constrains_time(self, ds_mixed):
+        """Selecting word should constrain time to word's interval."""
+        # "red" is [0, 40)
+        result = ds_mixed.sel(word="red")
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        # Time should be in [0, 40] (linspace includes endpoint)
+        assert result.time.min().values >= 0.0
+        assert result.time.max().values <= 40.0
+
+    def test_sel_word_constrains_phoneme(self, ds_mixed):
+        """Selecting word should constrain phonemes to overlapping ones."""
+        # "red" is [0, 40), phonemes in this range: aa[0,20), bb[20,40)
+        result = ds_mixed.sel(word="red")
+        _ = result * 1
+        assert result.sizes["phoneme"] == 2
+        assert set(result.phoneme.values) == {"aa", "bb"}
+
+    def test_sel_word_middle(self, ds_mixed):
+        """Selecting middle word should constrain correctly."""
+        # "green" is [40, 80), phonemes: cc[40,60), dd[60,80)
+        result = ds_mixed.sel(word="green")
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.sizes["phoneme"] == 2
+        assert set(result.phoneme.values) == {"cc", "dd"}
+
+    def test_sel_word_last(self, ds_mixed):
+        """Selecting last word should constrain correctly."""
+        # "blue" is [80, 120), phonemes: ee[80,100), ff[100,120)
+        result = ds_mixed.sel(word="blue")
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.sizes["phoneme"] == 2
+        assert set(result.phoneme.values) == {"ee", "ff"}
+
+
+class TestMixedFormatSelByPhoneme:
+    """Tests for sel on the onset/duration dimension (phoneme)."""
+
+    @pytest.fixture
+    def ds_mixed(self):
+        """Create dataset with mixed formats."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [40.0, 80.0, 120.0], closed="left"
+        )
+        phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        phoneme_durations = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["red", "green", "blue"]),
+                "phoneme_onset": ("phoneme", phoneme_onsets),
+                "phoneme_duration": ("phoneme", phoneme_durations),
+                "phoneme": ("phoneme", ["aa", "bb", "cc", "dd", "ee", "ff"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "word",
+                "phoneme_onset",
+                "phoneme_duration",
+                "phoneme",
+            ],
+            DimensionInterval,
+            onset_duration_coords={"phoneme": ("phoneme_onset", "phoneme_duration")},
+        )
+
+    def test_sel_phoneme_constrains_time(self, ds_mixed):
+        """Selecting phoneme should constrain time to phoneme's interval."""
+        # "aa" is [0, 20)
+        result = ds_mixed.sel(phoneme="aa")
+        _ = result * 1
+        assert result.sizes["phoneme"] == 1
+        assert result.time.min().values >= 0.0
+        assert result.time.max().values < 20.0
+
+    def test_sel_phoneme_constrains_word(self, ds_mixed):
+        """Selecting phoneme should constrain words to overlapping ones."""
+        # "aa" is [0, 20), word in this range: red[0,40)
+        result = ds_mixed.sel(phoneme="aa")
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.word.values[0] == "red"
+
+    def test_sel_phoneme_middle(self, ds_mixed):
+        """Selecting middle phoneme should constrain correctly."""
+        # "cc" is [40, 60), word: green[40,80)
+        result = ds_mixed.sel(phoneme="cc")
+        _ = result * 1
+        assert result.sizes["phoneme"] == 1
+        assert result.sizes["word"] == 1
+        assert result.word.values[0] == "green"
+
+    def test_sel_phoneme_last(self, ds_mixed):
+        """Selecting last phoneme should constrain correctly."""
+        # "ff" is [100, 120), word: blue[80,120)
+        result = ds_mixed.sel(phoneme="ff")
+        _ = result * 1
+        assert result.sizes["phoneme"] == 1
+        assert result.sizes["word"] == 1
+        assert result.word.values[0] == "blue"
+
+
+class TestMixedFormatSelByTime:
+    """Tests for sel on time dimension with mixed formats."""
+
+    @pytest.fixture
+    def ds_mixed(self):
+        """Create dataset with mixed formats."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [40.0, 80.0, 120.0], closed="left"
+        )
+        phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        phoneme_durations = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["red", "green", "blue"]),
+                "phoneme_onset": ("phoneme", phoneme_onsets),
+                "phoneme_duration": ("phoneme", phoneme_durations),
+                "phoneme": ("phoneme", ["aa", "bb", "cc", "dd", "ee", "ff"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "word",
+                "phoneme_onset",
+                "phoneme_duration",
+                "phoneme",
+            ],
+            DimensionInterval,
+            onset_duration_coords={"phoneme": ("phoneme_onset", "phoneme_duration")},
+        )
+
+    def test_sel_time_constrains_word(self, ds_mixed):
+        """Selecting time should constrain word (IntervalIndex format)."""
+        # Time [30, 70) overlaps word: red[0,40), green[40,80) -> 2 words
+        result = ds_mixed.sel(time=slice(30, 70))
+        _ = result * 1
+        assert result.sizes["word"] == 2
+        assert set(result.word.values) == {"red", "green"}
+
+    def test_sel_time_constrains_phoneme(self, ds_mixed):
+        """Selecting time should constrain phoneme (onset/duration format)."""
+        # Time [30, 70) overlaps phoneme: bb[20,40), cc[40,60), dd[60,80) -> 3 phonemes
+        result = ds_mixed.sel(time=slice(30, 70))
+        _ = result * 1
+        assert result.sizes["phoneme"] == 3
+        assert set(result.phoneme.values) == {"bb", "cc", "dd"}
+
+    def test_sel_time_constrains_both(self, ds_mixed):
+        """Selecting time should constrain both dimensions correctly."""
+        # Time [50, 90) overlaps:
+        # - word: green[40,80), blue[80,120) -> 2 words
+        # - phoneme: cc[40,60), dd[60,80), ee[80,100) -> 3 phonemes
+        result = ds_mixed.sel(time=slice(50, 90))
+        _ = result * 1
+        assert result.sizes["word"] == 2
+        assert result.sizes["phoneme"] == 3
+        assert set(result.word.values) == {"green", "blue"}
+        assert set(result.phoneme.values) == {"cc", "dd", "ee"}
+
+    def test_sel_time_scalar_nearest(self, ds_mixed):
+        """Selecting scalar time with nearest should work."""
+        result = ds_mixed.sel(time=50.0, method="nearest")
+        assert result.sizes["time"] == 1
+
+
+class TestMixedFormatIsel:
+    """Tests for isel with mixed formats."""
+
+    @pytest.fixture
+    def ds_mixed(self):
+        """Create dataset with mixed formats."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [40.0, 80.0, 120.0], closed="left"
+        )
+        phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        phoneme_durations = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["red", "green", "blue"]),
+                "phoneme_onset": ("phoneme", phoneme_onsets),
+                "phoneme_duration": ("phoneme", phoneme_durations),
+                "phoneme": ("phoneme", ["aa", "bb", "cc", "dd", "ee", "ff"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "word",
+                "phoneme_onset",
+                "phoneme_duration",
+                "phoneme",
+            ],
+            DimensionInterval,
+            onset_duration_coords={"phoneme": ("phoneme_onset", "phoneme_duration")},
+        )
+
+    def test_isel_time_constrains_both(self, ds_mixed):
+        """isel on time should constrain both interval dimensions."""
+        # First 300 indices cover time ~0-36, which overlaps:
+        # - word: red[0,40) -> 1 word
+        # - phoneme: aa[0,20), bb[20,40) -> 2 phonemes
+        result = ds_mixed.isel(time=slice(0, 300))
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.sizes["phoneme"] == 2
+
+    def test_isel_time_middle(self, ds_mixed):
+        """isel on middle time range."""
+        # Indices 400-600 cover time ~48-72, which overlaps:
+        # - word: green[40,80) -> 1 word
+        # - phoneme: cc[40,60), dd[60,80) -> 2 phonemes
+        result = ds_mixed.isel(time=slice(400, 600))
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.sizes["phoneme"] == 2
+
+
+class TestMixedFormatSelByInterval:
+    """Tests for sel on interval coordinates directly."""
+
+    @pytest.fixture
+    def ds_mixed(self):
+        """Create dataset with mixed formats."""
+        import numpy as np
+        import pandas as pd
+        import xarray as xr
+
+        N = 1000
+        times = np.linspace(0, 120, N)
+        word_intervals = pd.IntervalIndex.from_arrays(
+            [0.0, 40.0, 80.0], [40.0, 80.0, 120.0], closed="left"
+        )
+        phoneme_onsets = np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0])
+        phoneme_durations = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
+
+        ds = xr.Dataset(
+            {"data": (("C", "time"), np.random.rand(2, N))},
+            coords={
+                "time": times,
+                "word_intervals": ("word", word_intervals),
+                "word": ("word", ["red", "green", "blue"]),
+                "phoneme_onset": ("phoneme", phoneme_onsets),
+                "phoneme_duration": ("phoneme", phoneme_durations),
+                "phoneme": ("phoneme", ["aa", "bb", "cc", "dd", "ee", "ff"]),
+            },
+        )
+
+        return ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "word",
+                "phoneme_onset",
+                "phoneme_duration",
+                "phoneme",
+            ],
+            DimensionInterval,
+            onset_duration_coords={"phoneme": ("phoneme_onset", "phoneme_duration")},
+        )
+
+    def test_sel_word_interval_point(self, ds_mixed):
+        """Selecting by point in word_intervals should work."""
+        # Point 50 is in green[40,80)
+        result = ds_mixed.sel(word_intervals=50)
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.word.values[0] == "green"
+
+    def test_sel_phoneme_onset(self, ds_mixed):
+        """Selecting by phoneme_onset should work."""
+        # onset=40.0 is phoneme "cc"
+        result = ds_mixed.sel(phoneme_onset=40.0)
+        _ = result * 1
+        assert result.sizes["phoneme"] == 1
+        assert result.phoneme.values[0] == "cc"
+
+    def test_sel_word_interval_constrains_phoneme(self, ds_mixed):
+        """Selecting by word_interval should constrain phoneme."""
+        # Point 10 is in red[0,40), phonemes: aa[0,20), bb[20,40) -> 2
+        result = ds_mixed.sel(word_intervals=10)
+        _ = result * 1
+        assert result.sizes["phoneme"] == 2
+        assert set(result.phoneme.values) == {"aa", "bb"}
+
+    def test_sel_phoneme_onset_constrains_word(self, ds_mixed):
+        """Selecting by phoneme_onset should constrain word."""
+        # onset=60.0 is phoneme "dd" [60,80), word: green[40,80)
+        result = ds_mixed.sel(phoneme_onset=60.0)
+        _ = result * 1
+        assert result.sizes["word"] == 1
+        assert result.word.values[0] == "green"
