@@ -16,6 +16,8 @@ project:
       title: IntervalIndex Example
     - file: onset_duration_example.ipynb
       title: Onset/Duration Example
+    - file: abs_rel_time_example.ipynb
+      title: Absolute/Relative Time
     - title: Gallery
       children:
         - file: cell_hierarchy_example.ipynb

@@ -20,8 +20,43 @@ Custom xarray Index implementations for keeping multiple coordinates in sync acr
 ```bash
 uv run pytest                        # Run tests
 uv run jupyter execute <notebook>    # Execute a notebook in place
-uv run jupyter-book build docs/      # Build docs
-uv run jupyter-book start docs/      # Preview docs locally
+```
+
+## Documentation
+
+Documentation uses [MyST](https://mystmd.org/) and is located in `docs/`.
+
+### Structure
+
+- `docs/myst.yml` - Configuration file including the Table of Contents (TOC)
+- `docs/index.md` - Main landing page
+- `docs/*.ipynb` - Example notebooks (rendered as documentation pages)
+
+### Adding New Documentation
+
+1. **Add notebooks to `docs/`**, not `examples/` (which is gitignored)
+2. **Update the TOC** in `docs/myst.yml` under `project.toc`
+3. Notebooks are executable documentation - ensure they run without errors
+
+### Building Docs
+
+```bash
+myst start docs/      # Preview docs locally with hot reload
+myst build docs/      # Build static docs
+```
+
+### TOC Format (myst.yml)
+
+```yaml
+project:
+  toc:
+    - file: index.md
+    - file: my_example.ipynb
+      title: My Example Title
+    - title: Section Name
+      children:
+        - file: nested_example.ipynb
+          title: Nested Example
 ```
 
 ## Architecture Notes
