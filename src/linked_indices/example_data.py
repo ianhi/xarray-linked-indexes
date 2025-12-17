@@ -24,6 +24,7 @@ __all__ = [
     # xarray Dataset generators (for testing)
     "multi_interval_dataset",
     "onset_duration_dataset",
+    "trial_based_dataset",
 ]
 
 
@@ -504,6 +505,106 @@ def onset_duration_dataset() -> "xr.Dataset":
             "phoneme_onset": ("phoneme", phoneme_onsets),
             "phoneme_duration": ("phoneme", phoneme_durations),
             "phoneme": ("phoneme", phoneme_labels),
+        },
+    )
+
+    return ds
+
+
+def trial_based_dataset(
+    n_trials: int = 5,
+    trial_length: float = 10.0,
+    sample_rate: int = 100,
+    trial_labels: list[str] | None = None,
+    seed: int | None = 42,
+) -> "xr.Dataset":
+    """
+    Create a dataset with trial-based data and both absolute and relative time.
+
+    This is useful for testing AbsoluteRelativeIndex.
+
+    The dataset has dimensions (trial, rel_time) with:
+    - rel_time: relative time within each trial (0 to trial_length)
+    - trial: trial labels
+    - abs_time: 2D coordinate (trial, rel_time) mapping to absolute time
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of trials. Default: 5
+    trial_length : float
+        Duration of each trial in seconds. Default: 10.0
+    sample_rate : int
+        Samples per second within each trial. Default: 100
+    trial_labels : list[str] | None
+        Labels for each trial. If None, uses ["trial_0", "trial_1", ...].
+    seed : int | None
+        Random seed for reproducibility. None for random.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with structure:
+            Dimensions: (trial: n_trials, rel_time: trial_length * sample_rate)
+            Coordinates:
+              * trial     (trial) str - trial labels
+              * rel_time  (rel_time) float64 - relative time within trial
+                abs_time  (trial, rel_time) float64 - absolute time (2D)
+                trial_onset (trial) float64 - start time of each trial
+            Data variables:
+                data      (trial, rel_time) float64 - simulated signal
+
+    Examples
+    --------
+    >>> from linked_indices.example_data import trial_based_dataset
+    >>> ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+    >>> dict(ds.dims)
+    {'trial': 3, 'rel_time': 50}
+    >>> ds.abs_time.shape
+    (3, 50)
+    >>> float(ds.abs_time[0, 0])  # First trial starts at t=0
+    0.0
+    >>> float(ds.abs_time[1, 0])  # Second trial starts at t=5
+    5.0
+    """
+    import xarray as xr
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    # Generate time arrays
+    n_samples = int(trial_length * sample_rate)
+    rel_times = np.linspace(0, trial_length, n_samples, endpoint=False)
+
+    # Trial labels
+    if trial_labels is None:
+        trial_labels = [f"trial_{i}" for i in range(n_trials)]
+    elif len(trial_labels) != n_trials:
+        raise ValueError(
+            f"trial_labels length ({len(trial_labels)}) must match n_trials ({n_trials})"
+        )
+
+    # Trial onsets (absolute time when each trial starts)
+    trial_onsets = np.arange(n_trials) * trial_length
+
+    # Absolute time is a 2D array: abs_time[trial, rel_time_idx] = trial_onset + rel_time
+    abs_time_2d = trial_onsets[:, np.newaxis] + rel_times[np.newaxis, :]
+
+    # Generate different signal for each trial (sine, square, sawtooth, etc.)
+    data = np.zeros((n_trials, n_samples))
+    for i in range(n_trials):
+        freq = 1.0 + i * 0.5  # Different frequency per trial
+        phase = i * np.pi / 4  # Different phase
+        data[i] = np.sin(2 * np.pi * freq * rel_times + phase)
+        data[i] += 0.1 * np.random.randn(n_samples)  # Add noise
+
+    ds = xr.Dataset(
+        {"data": (("trial", "rel_time"), data)},
+        coords={
+            "trial": trial_labels,
+            "rel_time": rel_times,
+            "abs_time": (("trial", "rel_time"), abs_time_2d),
+            "trial_onset": ("trial", trial_onsets),
         },
     )
 
