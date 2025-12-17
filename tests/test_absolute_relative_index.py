@@ -260,6 +260,14 @@ class TestAbsoluteRelativeIndexIsel:
         assert result.sizes["trial"] == 1
         assert result.sizes["rel_time"] == 10
 
+    def test_isel_rel_time_scalar(self, ds_indexed):
+        """isel on rel_time with scalar index."""
+        result = ds_indexed.isel(rel_time=5)
+        _ = result * 1
+        # Should have all trials and one rel_time point
+        assert result.sizes["trial"] == 3
+        assert result.sizes["rel_time"] == 1
+
 
 class TestAbsoluteRelativeIndexCombinedSelection:
     """Tests for combined selections on multiple dimensions."""
@@ -323,3 +331,123 @@ class TestAbsoluteRelativeIndexEdgeCases:
         # Should select exactly one point
         assert result.sizes["trial"] == 1
         assert result.sizes["rel_time"] == 1
+
+    def test_sel_abs_time_slice_outside_range(self, ds_indexed):
+        """Selecting abs_time slice completely outside data range returns empty."""
+        # abs_time 100-200 is way outside the range (0-15)
+        result = ds_indexed.sel(abs_time=slice(100.0, 200.0))
+        _ = result * 1
+        # Should return empty slices
+        assert result.sizes["trial"] == 0
+        assert result.sizes["rel_time"] == 0
+
+
+class TestAbsoluteRelativeIndexValidation:
+    """Tests for validation and error handling during index creation."""
+
+    def test_missing_2d_coord_raises(self):
+        """Error when no 2D coordinate is provided."""
+        import xarray as xr
+
+        # Create a dataset with only 1D coordinates
+        ds = xr.Dataset(
+            {"data": (("trial", "rel_time"), np.random.rand(3, 10))},
+            coords={
+                "trial": ["a", "b", "c"],
+                "rel_time": np.linspace(0, 1, 10),
+            },
+        )
+        with pytest.raises(ValueError, match="requires exactly one 2D coordinate"):
+            ds.drop_indexes(["trial", "rel_time"]).set_xindex(
+                ["trial", "rel_time"],
+                AbsoluteRelativeIndex,
+            )
+
+    def test_missing_trial_dim_coord_raises(self):
+        """Error when trial dimension coordinate is missing."""
+        import xarray as xr
+
+        # Create a dataset with 2D abs_time but missing trial coord
+        abs_time = np.arange(30).reshape(3, 10).astype(float)
+        ds = xr.Dataset(
+            {"data": (("trial", "rel_time"), np.random.rand(3, 10))},
+            coords={
+                "abs_time": (("trial", "rel_time"), abs_time),
+                "rel_time": np.linspace(0, 1, 10),
+                # trial coord missing!
+            },
+        )
+        with pytest.raises(ValueError, match="Missing coordinate for trial dimension"):
+            ds.drop_indexes(["rel_time"]).set_xindex(
+                ["abs_time", "rel_time"],
+                AbsoluteRelativeIndex,
+            )
+
+    def test_missing_rel_time_dim_coord_raises(self):
+        """Error when rel_time dimension coordinate is missing."""
+        import xarray as xr
+
+        # Create a dataset with 2D abs_time but missing rel_time coord
+        abs_time = np.arange(30).reshape(3, 10).astype(float)
+        ds = xr.Dataset(
+            {"data": (("trial", "rel_time"), np.random.rand(3, 10))},
+            coords={
+                "abs_time": (("trial", "rel_time"), abs_time),
+                "trial": ["a", "b", "c"],
+                # rel_time coord missing!
+            },
+        )
+        with pytest.raises(
+            ValueError, match="Missing coordinate for rel_time dimension"
+        ):
+            ds.drop_indexes(["trial"]).set_xindex(
+                ["abs_time", "trial"],
+                AbsoluteRelativeIndex,
+            )
+
+
+class TestAbsoluteRelativeIndexDebugMode:
+    """Tests for debug mode output."""
+
+    def test_debug_mode_creation(self, capsys):
+        """Debug mode prints info during index creation."""
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds.drop_indexes(["trial", "rel_time"]).set_xindex(
+            ["abs_time", "trial", "rel_time"],
+            AbsoluteRelativeIndex,
+            debug=True,
+        )
+        captured = capsys.readouterr()
+        assert "DEBUG from_variables:" in captured.out
+        assert "abs_time_name=abs_time" in captured.out
+
+    def test_debug_mode_sel(self, capsys):
+        """Debug mode prints info during sel."""
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.drop_indexes(["trial", "rel_time"]).set_xindex(
+            ["abs_time", "trial", "rel_time"],
+            AbsoluteRelativeIndex,
+            debug=True,
+        )
+        # Clear creation output
+        capsys.readouterr()
+
+        ds_indexed.sel(abs_time=1.0, method="nearest")
+        captured = capsys.readouterr()
+        assert "DEBUG sel:" in captured.out
+        assert "DEBUG sel result:" in captured.out
+
+    def test_debug_mode_isel(self, capsys):
+        """Debug mode prints info during isel."""
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.drop_indexes(["trial", "rel_time"]).set_xindex(
+            ["abs_time", "trial", "rel_time"],
+            AbsoluteRelativeIndex,
+            debug=True,
+        )
+        # Clear creation output
+        capsys.readouterr()
+
+        ds_indexed.isel(trial=0)
+        captured = capsys.readouterr()
+        assert "DEBUG isel:" in captured.out

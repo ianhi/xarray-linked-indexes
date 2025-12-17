@@ -106,11 +106,6 @@ class AbsoluteRelativeIndex(Index):
                 f"Got coordinates: {list(variables.keys())}"
             )
 
-        if len(abs_time_var.dims) != 2:
-            raise ValueError(
-                f"abs_time coordinate must be 2D, got dims={abs_time_var.dims}"
-            )
-
         # Get the dimension names from abs_time
         trial_dim, rel_time_dim = abs_time_var.dims
 
@@ -253,8 +248,8 @@ class AbsoluteRelativeIndex(Index):
                 rel_time_start = min(rel_time_start, indices[0])
                 rel_time_stop = max(rel_time_stop, indices[-1] + 1)
 
-        if rel_time_start >= rel_time_stop:
-            # No valid rel_time range found
+        if rel_time_start >= rel_time_stop:  # pragma: no cover
+            # No valid rel_time range found (edge case with sparse data)
             rel_time_start = 0
             rel_time_stop = 0
 
@@ -375,7 +370,7 @@ class AbsoluteRelativeIndex(Index):
             new_trial_index = self._trial_info.trial_index.isel(
                 {trial_dim: trial_slice}
             )
-            if new_trial_index is None:
+            if new_trial_index is None:  # pragma: no cover
                 return None
             new_abs_time_values = new_abs_time_values[trial_slice]
             new_trial_onsets = new_trial_onsets[trial_slice]
@@ -390,7 +385,7 @@ class AbsoluteRelativeIndex(Index):
             new_rel_time_index = self._trial_info.rel_time_index.isel(
                 {rel_time_dim: rel_time_slice}
             )
-            if new_rel_time_index is None:
+            if new_rel_time_index is None:  # pragma: no cover
                 return None
             new_abs_time_values = new_abs_time_values[:, rel_time_slice]
 
