@@ -18,6 +18,8 @@ project:
       title: Onset/Duration Example
     - file: nd_index_demo.ipynb
       title: ND Coordinates
+    - file: ndindex_performance.ipynb
+      title: NDIndex Performance
     - title: Gallery
       children:
         - file: ndindex_slicing_gallery.ipynb
