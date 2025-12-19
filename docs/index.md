@@ -21,18 +21,13 @@ The DimensionInterval provides the ability to performantly store arbitrary inter
 
 See the [Multi-Interval Example](multi_interval_example.ipynb) for a detailed walkthrough.
 
-### AbsoluteRelative Index
+### NDIndex
 
-Provides the ability to work with both absolute or relative coord (e.g. time) for trialed data.
+Provides the ability to select on N-dimensional derived coordinates (like absolute time computed from trial offsets + relative time).
+
 ![diagram of two possible abs-rel indexes](images/abs-rel.png.excalidraw.png)
 
-See the [Absolute vs Relative Time Example](abs_rel_time_example.ipynb) for a detailed walkthrough.
-
-This then enables more advanced use cases such as building multiple time reference frames without having to shuffle the underlying data. This makes a task such as time-locking a low cost operation:
-
-![diagram of timelocking](images/event-locking.png.excalidraw.png)
-
-See the [Time-Locking Example](time-locking.ipynb) for a demonstration of event-locked analysis.
+See the [ND Coordinates Example](nd_index_demo.ipynb) for a detailed walkthrough covering trial-based data with both absolute and relative time coordinates.
 
 ### Use Cases
 

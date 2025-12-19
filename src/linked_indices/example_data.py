@@ -522,7 +522,7 @@ def trial_based_dataset(
     """
     Create a dataset with trial-based data and both absolute and relative time.
 
-    This is useful for testing AbsoluteRelativeIndex.
+    This is useful for testing NDIndex.
 
     Supports two modes:
     - "stacked" (default): 2D array with dimensions (trial, rel_time). Each trial

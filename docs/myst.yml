@@ -18,8 +18,6 @@ project:
       title: Onset/Duration Example
     - file: nd_index_demo.ipynb
       title: ND Coordinates
-    - file: abs_rel_time_example.ipynb
-      title: Absolute/Relative Time
     - title: Gallery
       children:
         - file: cell_hierarchy_example.ipynb
