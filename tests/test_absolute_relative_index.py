@@ -21,8 +21,22 @@ class TestTrialBasedDataset:
         ds = trial_based_dataset()
         assert "trial" in ds.dims
         assert "rel_time" in ds.dims
-        assert ds.sizes["trial"] == 5
-        assert ds.sizes["rel_time"] == 1000  # 10s * 100 samples/s
+        assert ds.sizes["trial"] == 3
+        assert ds.sizes["rel_time"] == 500  # 5s * 100 samples/s
+
+    def test_default_waveforms(self):
+        """Default dataset has cosine, square, sawtooth waveforms."""
+        ds = trial_based_dataset()
+        assert list(ds.trial.values) == ["cosine", "square", "sawtooth"]
+        # Check that waveforms are distinct (not random noise)
+        # Cosine at t=0 should be 1.0
+        assert abs(float(ds.data.sel(trial="cosine").isel(rel_time=0)) - 1.0) < 0.01
+        # Square at t=0 should be 1.0
+        assert abs(float(ds.data.sel(trial="square").isel(rel_time=0)) - 1.0) < 0.01
+        # Sawtooth at t=0 should be -1.0
+        assert (
+            abs(float(ds.data.sel(trial="sawtooth").isel(rel_time=0)) - (-1.0)) < 0.01
+        )
 
     def test_custom_parameters(self):
         """Custom parameters are respected."""
@@ -108,7 +122,12 @@ class TestAbsoluteRelativeIndexSelAbsTime:
     @pytest.fixture
     def ds_indexed(self):
         """Create an indexed trial-based dataset."""
-        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=5.0,
+            sample_rate=10,
+            trial_labels=["trial_0", "trial_1", "trial_2"],
+        )
         return ds.drop_indexes(["trial", "rel_time"]).set_xindex(
             ["abs_time", "trial", "rel_time"],
             AbsoluteRelativeIndex,
@@ -166,7 +185,12 @@ class TestAbsoluteRelativeIndexSelTrial:
     @pytest.fixture
     def ds_indexed(self):
         """Create an indexed trial-based dataset."""
-        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=5.0,
+            sample_rate=10,
+            trial_labels=["trial_0", "trial_1", "trial_2"],
+        )
         return ds.drop_indexes(["trial", "rel_time"]).set_xindex(
             ["abs_time", "trial", "rel_time"],
             AbsoluteRelativeIndex,
@@ -200,7 +224,12 @@ class TestAbsoluteRelativeIndexSelRelTime:
     @pytest.fixture
     def ds_indexed(self):
         """Create an indexed trial-based dataset."""
-        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=5.0,
+            sample_rate=10,
+            trial_labels=["trial_0", "trial_1", "trial_2"],
+        )
         return ds.drop_indexes(["trial", "rel_time"]).set_xindex(
             ["abs_time", "trial", "rel_time"],
             AbsoluteRelativeIndex,
@@ -232,7 +261,12 @@ class TestAbsoluteRelativeIndexIsel:
     @pytest.fixture
     def ds_indexed(self):
         """Create an indexed trial-based dataset."""
-        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=5.0,
+            sample_rate=10,
+            trial_labels=["trial_0", "trial_1", "trial_2"],
+        )
         return ds.drop_indexes(["trial", "rel_time"]).set_xindex(
             ["abs_time", "trial", "rel_time"],
             AbsoluteRelativeIndex,
@@ -275,7 +309,12 @@ class TestAbsoluteRelativeIndexCombinedSelection:
     @pytest.fixture
     def ds_indexed(self):
         """Create an indexed trial-based dataset."""
-        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=5.0,
+            sample_rate=10,
+            trial_labels=["trial_0", "trial_1", "trial_2"],
+        )
         return ds.drop_indexes(["trial", "rel_time"]).set_xindex(
             ["abs_time", "trial", "rel_time"],
             AbsoluteRelativeIndex,
@@ -306,7 +345,12 @@ class TestAbsoluteRelativeIndexEdgeCases:
     @pytest.fixture
     def ds_indexed(self):
         """Create an indexed trial-based dataset."""
-        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=5.0,
+            sample_rate=10,
+            trial_labels=["trial_0", "trial_1", "trial_2"],
+        )
         return ds.drop_indexes(["trial", "rel_time"]).set_xindex(
             ["abs_time", "trial", "rel_time"],
             AbsoluteRelativeIndex,
@@ -451,3 +495,135 @@ class TestAbsoluteRelativeIndexDebugMode:
         ds_indexed.isel(trial=0)
         captured = capsys.readouterr()
         assert "DEBUG isel:" in captured.out
+
+
+class TestTrialBasedDatasetModeLinear:
+    """Tests for trial_based_dataset with mode='linear'."""
+
+    def test_linear_mode_returns_dataset(self):
+        """Linear mode returns an xarray Dataset."""
+        ds = trial_based_dataset(mode="linear")
+        assert isinstance(ds, xr.Dataset)
+
+    def test_linear_mode_dimensions(self):
+        """Linear mode has abs_time as the single dimension."""
+        ds = trial_based_dataset(mode="linear")
+        assert "abs_time" in ds.dims
+        # trial and rel_time should be coords, not dims
+        assert "trial" not in ds.dims
+        assert "rel_time" not in ds.dims
+        # Check total samples: 3 trials * 5s * 100 Hz = 1500
+        assert ds.sizes["abs_time"] == 1500
+
+    def test_linear_mode_coords(self):
+        """Linear mode has trial and rel_time as 1D coordinates."""
+        ds = trial_based_dataset(mode="linear")
+        assert "trial" in ds.coords
+        assert "rel_time" in ds.coords
+        assert "trial_onset" in ds.coords
+        # Coords should be 1D with abs_time dimension
+        assert ds.coords["trial"].dims == ("abs_time",)
+        assert ds.coords["rel_time"].dims == ("abs_time",)
+
+    def test_linear_mode_abs_time_values(self):
+        """Linear mode abs_time values are contiguous."""
+        ds = trial_based_dataset(
+            n_trials=3, trial_length=5.0, sample_rate=10, mode="linear"
+        )
+        abs_time = ds.coords["abs_time"].values
+        # Should go from 0 to near 15 (3 trials * 5s)
+        assert abs_time[0] == 0.0
+        assert abs_time[-1] < 15.0
+        # Should be monotonically increasing
+        assert np.all(np.diff(abs_time) > 0)
+
+    def test_linear_mode_trial_coord_values(self):
+        """Linear mode trial coord correctly identifies trial for each sample."""
+        ds = trial_based_dataset(
+            n_trials=3, trial_length=2.0, sample_rate=10, mode="linear"
+        )
+        # 3 trials * 2s * 10 Hz = 60 samples
+        # Each trial has 20 samples
+        trial_values = ds.coords["trial"].values
+        assert len(trial_values) == 60
+        # First 20 should be trial 0
+        assert all(t == "cosine" for t in trial_values[:20])
+        # Next 20 should be trial 1
+        assert all(t == "square" for t in trial_values[20:40])
+        # Last 20 should be trial 2
+        assert all(t == "sawtooth" for t in trial_values[40:])
+
+    def test_linear_mode_rel_time_coord_values(self):
+        """Linear mode rel_time coord resets for each trial."""
+        ds = trial_based_dataset(
+            n_trials=3, trial_length=2.0, sample_rate=10, mode="linear"
+        )
+        rel_time = ds.coords["rel_time"].values
+        # rel_time should reset at each trial boundary
+        # First trial: 0.0, 0.1, ..., 1.9
+        assert rel_time[0] == 0.0
+        assert rel_time[19] < 2.0
+        # Second trial starts again at 0.0
+        assert rel_time[20] == 0.0
+
+    def test_linear_mode_data_shape(self):
+        """Linear mode data has 1D shape."""
+        ds = trial_based_dataset(
+            n_trials=3, trial_length=5.0, sample_rate=10, mode="linear"
+        )
+        assert ds.data.dims == ("abs_time",)
+        assert ds.data.shape == (150,)  # 3 * 5 * 10
+
+    def test_linear_mode_waveforms(self):
+        """Linear mode preserves waveform patterns."""
+        ds = trial_based_dataset(mode="linear")
+        # Check that the waveforms are present in the correct order
+        # First sample (t=0 of cosine) should be ~1.0
+        assert abs(float(ds.data[0]) - 1.0) < 0.01
+        # First sample of second trial (square at t=0) should be ~1.0
+        n_per_trial = 500  # 5s * 100 Hz
+        assert abs(float(ds.data[n_per_trial]) - 1.0) < 0.01
+        # First sample of third trial (sawtooth at t=0) should be ~-1.0
+        assert abs(float(ds.data[2 * n_per_trial]) - (-1.0)) < 0.01
+
+    def test_linear_mode_custom_labels(self):
+        """Linear mode respects custom trial labels."""
+        labels = ["trial_A", "trial_B", "trial_C"]
+        ds = trial_based_dataset(
+            n_trials=3,
+            trial_length=2.0,
+            sample_rate=10,
+            trial_labels=labels,
+            mode="linear",
+        )
+        unique_trials = set(ds.coords["trial"].values)
+        assert unique_trials == set(labels)
+
+    def test_invalid_mode_raises(self):
+        """Invalid mode parameter raises ValueError."""
+        with pytest.raises(ValueError, match="mode must be 'stacked' or 'linear'"):
+            trial_based_dataset(mode="invalid")
+
+
+class TestTrialBasedDatasetModeStacked:
+    """Tests for trial_based_dataset with mode='stacked' (the default)."""
+
+    def test_stacked_mode_is_default(self):
+        """Stacked mode is the default."""
+        ds_default = trial_based_dataset()
+        ds_stacked = trial_based_dataset(mode="stacked")
+        # Both should have same structure
+        assert ds_default.dims == ds_stacked.dims
+        assert ds_default.sizes == ds_stacked.sizes
+
+    def test_stacked_mode_dimensions(self):
+        """Stacked mode has trial and rel_time dimensions."""
+        ds = trial_based_dataset(mode="stacked")
+        assert "trial" in ds.dims
+        assert "rel_time" in ds.dims
+        assert "abs_time" not in ds.dims
+
+    def test_stacked_mode_abs_time_is_2d(self):
+        """Stacked mode has abs_time as 2D coordinate."""
+        ds = trial_based_dataset(mode="stacked")
+        assert ds.coords["abs_time"].dims == ("trial", "rel_time")
