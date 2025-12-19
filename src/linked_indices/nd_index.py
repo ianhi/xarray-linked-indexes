@@ -256,13 +256,15 @@ class NDIndex(Index):
                 axes_to_reduce = tuple(j for j in range(values.ndim) if j != i)
                 if axes_to_reduce:
                     has_value = np.any(in_range, axis=axes_to_reduce)
-                else:
+                else:  # pragma: no cover
+                    # Defensive: only reachable if ndim < 2, but we validate ndim >= 2
                     has_value = in_range
 
                 indices = np.where(has_value)[0]
                 if len(indices) > 0:
                     result[dim] = slice(int(indices[0]), int(indices[-1]) + 1)
-                else:
+                else:  # pragma: no cover
+                    # Defensive: if any cell is in_range, all dims have indices
                     result[dim] = slice(0, 0)
 
         elif method == "trim_outer":
@@ -275,12 +277,14 @@ class NDIndex(Index):
                 axes_to_reduce = tuple(j for j in range(values.ndim) if j != i)
                 if axes_to_reduce:
                     has_value = np.any(in_range, axis=axes_to_reduce)
-                else:
+                else:  # pragma: no cover
+                    # Defensive: only reachable if ndim < 2, but we validate ndim >= 2
                     has_value = in_range
 
                 indices = np.where(has_value)[0]
 
-                if len(indices) == 0:
+                if len(indices) == 0:  # pragma: no cover
+                    # Defensive: if any cell is in_range, all dims have indices
                     result[dim] = slice(0, 0)
                 elif dim == inner_dim:
                     # Inner dim: bounding box (continuous range)
