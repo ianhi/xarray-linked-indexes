@@ -20,6 +20,8 @@ project:
       title: ND Coordinates
     - title: Gallery
       children:
+        - file: ndindex_slicing_gallery.ipynb
+          title: NDIndex Slicing
         - file: cell_hierarchy_example.ipynb
           title: Cell Hierarchy
     - file: alternatives.md

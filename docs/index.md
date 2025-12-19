@@ -29,6 +29,10 @@ Provides the ability to select on N-dimensional derived coordinates (like absolu
 
 See the [ND Coordinates Example](nd_index_demo.ipynb) for a detailed walkthrough covering trial-based data with both absolute and relative time coordinates.
 
+```{note}
+The time-locking/epoching workflow shown in the diagram is not yet implemented. NDIndex currently supports selection on N-D coordinates but does not yet provide utilities for building multiple time reference frames.
+```
+
 ### Use Cases
 
 - **Speech/audio data** with hierarchical annotations (words, phonemes, time)
