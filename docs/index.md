@@ -13,6 +13,26 @@ Custom xarray indexes for keeping multiple coordinates in sync across shared dim
 This library provides custom [xarray Index](https://docs.xarray.dev/en/stable/internals/how-to-create-custom-index.html) implementations that automatically constrain related dimensions when you select on any one of them.
 
 
+### DimensionInterval
+
+The DimensionInterval provides the ability to performantly store arbitrary intervals over a continuous coordinate. Like a multiindex but more generalized. See the [comparison with MultiIndex](alt-multiindex.ipynb) for an understanding of the comparison.
+
+![diagram of possible sel calls for DimensionInterval](images/generic-intervals.png.excalidraw.png)
+
+See the [Multi-Interval Example](multi_interval_example.ipynb) for a detailed walkthrough.
+
+### NDIndex
+
+Provides the ability to select on N-dimensional derived coordinates (like absolute time computed from trial offsets + relative time).
+
+![diagram of two possible abs-rel indexes](images/abs-rel.png.excalidraw.png)
+
+See the [ND Coordinates Example](nd_index_demo.ipynb) for a detailed walkthrough covering trial-based data with both absolute and relative time coordinates.
+
+```{note}
+The time-locking/epoching workflow shown in the diagram is not yet implemented. NDIndex currently supports selection on N-D coordinates but does not yet provide utilities for building multiple time reference frames.
+```
+
 ### Use Cases
 
 - **Speech/audio data** with hierarchical annotations (words, phonemes, time)

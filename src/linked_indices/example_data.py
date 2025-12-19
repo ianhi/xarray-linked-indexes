@@ -24,6 +24,7 @@ __all__ = [
     # xarray Dataset generators (for testing)
     "multi_interval_dataset",
     "onset_duration_dataset",
+    "trial_based_dataset",
 ]
 
 
@@ -506,5 +507,176 @@ def onset_duration_dataset() -> "xr.Dataset":
             "phoneme": ("phoneme", phoneme_labels),
         },
     )
+
+    return ds
+
+
+def trial_based_dataset(
+    n_trials: int = 3,
+    trial_length: float = 5.0,
+    sample_rate: int = 100,
+    trial_labels: list[str] | None = None,
+    seed: int | None = 42,
+    mode: str = "stacked",
+) -> "xr.Dataset":
+    """
+    Create a dataset with trial-based data and both absolute and relative time.
+
+    This is useful for testing NDIndex.
+
+    Supports two modes:
+    - "stacked" (default): 2D array with dimensions (trial, rel_time). Each trial
+      has the same relative time coordinates but different absolute time ranges.
+    - "linear": 1D array with dimension (abs_time). All trials concatenated into
+      a single continuous stream indexed by absolute time, with trial as a
+      1D coordinate indicating which trial each timepoint belongs to.
+
+    By default, creates 3 trials with distinct waveforms:
+    - Trial 1 ("cosine"): cosine wave
+    - Trial 2 ("square"): square wave
+    - Trial 3 ("sawtooth"): sawtooth wave
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of trials. Default: 3
+    trial_length : float
+        Duration of each trial in seconds. Default: 5.0
+    sample_rate : int
+        Samples per second within each trial. Default: 100
+    trial_labels : list[str] | None
+        Labels for each trial. If None, uses ["cosine", "square", "sawtooth"]
+        for 3 trials, or ["trial_0", "trial_1", ...] for other counts.
+    seed : int | None
+        Random seed for reproducibility. None for random.
+    mode : str
+        Either "stacked" (2D with trial × rel_time) or "linear" (1D with abs_time).
+        Default: "stacked"
+
+    Returns
+    -------
+    xr.Dataset
+        For mode="stacked":
+            Dimensions: (trial: n_trials, rel_time: trial_length * sample_rate)
+            Coordinates:
+              * trial     (trial) str - trial labels
+              * rel_time  (rel_time) float64 - relative time within trial
+                abs_time  (trial, rel_time) float64 - absolute time (2D)
+                trial_onset (trial) float64 - start time of each trial
+            Data variables:
+                data      (trial, rel_time) float64 - simulated signal
+
+        For mode="linear":
+            Dimensions: (abs_time: n_trials * trial_length * sample_rate)
+            Coordinates:
+              * abs_time   (abs_time) float64 - absolute time
+                rel_time   (abs_time) float64 - relative time within each trial
+                trial      (abs_time) str - trial label for each timepoint
+                trial_onset (abs_time) float64 - onset time of each trial
+            Data variables:
+                data       (abs_time) float64 - simulated signal
+
+    Examples
+    --------
+    >>> from linked_indices.example_data import trial_based_dataset
+    >>> ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+    >>> dict(ds.dims)
+    {'trial': 3, 'rel_time': 50}
+    >>> ds.abs_time.shape
+    (3, 50)
+    >>> float(ds.abs_time[0, 0])  # First trial starts at t=0
+    0.0
+    >>> float(ds.abs_time[1, 0])  # Second trial starts at t=5
+    5.0
+
+    >>> ds_linear = trial_based_dataset(mode="linear")
+    >>> dict(ds_linear.dims)
+    {'abs_time': 1500}
+    """
+    import xarray as xr
+    from scipy import signal
+
+    if mode not in ("stacked", "linear"):
+        raise ValueError(f"mode must be 'stacked' or 'linear', got '{mode}'")
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    # Generate time arrays
+    n_samples = int(trial_length * sample_rate)
+    rel_times = np.linspace(0, trial_length, n_samples, endpoint=False)
+
+    # Trial labels
+    if trial_labels is None:
+        if n_trials == 3:
+            trial_labels = ["cosine", "square", "sawtooth"]
+        else:
+            trial_labels = [f"trial_{i}" for i in range(n_trials)]
+    elif len(trial_labels) != n_trials:
+        raise ValueError(
+            f"trial_labels length ({len(trial_labels)}) must match n_trials ({n_trials})"
+        )
+
+    # Trial onsets (absolute time when each trial starts)
+    trial_onsets = np.arange(n_trials) * trial_length
+
+    # Generate distinct waveforms for each trial
+    freq = 0.5  # Base frequency in Hz
+    data_2d = np.zeros((n_trials, n_samples))
+
+    for i in range(n_trials):
+        waveform_type = i % 3  # Cycle through cosine, square, sawtooth
+        if waveform_type == 0:
+            # Cosine wave
+            data_2d[i] = np.cos(2 * np.pi * freq * rel_times)
+        elif waveform_type == 1:
+            # Square wave
+            data_2d[i] = signal.square(2 * np.pi * freq * rel_times)
+        else:
+            # Sawtooth wave
+            data_2d[i] = signal.sawtooth(2 * np.pi * freq * rel_times)
+
+    if mode == "stacked":
+        # 2D mode: (trial, rel_time)
+        # Absolute time is a 2D array: abs_time[trial, rel_time_idx] = trial_onset + rel_time
+        abs_time_2d = trial_onsets[:, np.newaxis] + rel_times[np.newaxis, :]
+
+        ds = xr.Dataset(
+            {"data": (("trial", "rel_time"), data_2d)},
+            coords={
+                "trial": trial_labels,
+                "rel_time": rel_times,
+                "abs_time": (("trial", "rel_time"), abs_time_2d),
+                "trial_onset": ("trial", trial_onsets),
+            },
+        )
+    else:
+        # Linear mode: (abs_time,)
+        # Concatenate all trials into a single 1D array
+        data_1d = data_2d.flatten()
+
+        # Absolute time is continuous across all trials
+        abs_time_1d = np.concatenate(
+            [trial_onsets[i] + rel_times for i in range(n_trials)]
+        )
+
+        # Relative time repeats for each trial
+        rel_time_1d = np.tile(rel_times, n_trials)
+
+        # Trial label for each timepoint
+        trial_1d = np.repeat(trial_labels, n_samples)
+
+        # Trial onset for each timepoint
+        trial_onset_1d = np.repeat(trial_onsets, n_samples)
+
+        ds = xr.Dataset(
+            {"data": (("abs_time",), data_1d)},
+            coords={
+                "abs_time": abs_time_1d,
+                "rel_time": ("abs_time", rel_time_1d),
+                "trial": ("abs_time", trial_1d),
+                "trial_onset": ("abs_time", trial_onset_1d),
+            },
+        )
 
     return ds

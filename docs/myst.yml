@@ -16,8 +16,14 @@ project:
       title: IntervalIndex Example
     - file: onset_duration_example.ipynb
       title: Onset/Duration Example
+    - file: nd_index_demo.ipynb
+      title: ND Coordinates
+    - file: ndindex_performance.ipynb
+      title: NDIndex Performance
     - title: Gallery
       children:
+        - file: ndindex_slicing_gallery.ipynb
+          title: NDIndex Slicing
         - file: cell_hierarchy_example.ipynb
           title: Cell Hierarchy
     - file: alternatives.md
