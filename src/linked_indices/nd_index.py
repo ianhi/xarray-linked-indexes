@@ -39,6 +39,12 @@ __all__ = ["NDIndex"]
 SLICE_METHODS = ("bounding_box", "trim_outer")
 
 
+def _is_sorted(arr: np.ndarray) -> bool:
+    """Check if a flattened array is sorted (ascending)."""
+    flat = arr.ravel()
+    return bool(np.all(flat[:-1] <= flat[1:]))
+
+
 @dataclass
 class NDCoord:
     """Information about an N-D coordinate."""
@@ -46,6 +52,28 @@ class NDCoord:
     name: str
     dims: tuple[str, ...]
     values: np.ndarray
+    # Cached flat values and sorted flag for O(log n) lookups
+    _flat_values: np.ndarray | None = None
+    _is_sorted: bool | None = None
+
+    def __post_init__(self):
+        """Check if values are sorted and cache flat array."""
+        self._flat_values = self.values.ravel()
+        self._is_sorted = _is_sorted(self.values)
+
+    @property
+    def is_sorted(self) -> bool:
+        """Whether the flattened values are sorted (enables O(log n) lookups)."""
+        if self._is_sorted is None:
+            self._is_sorted = _is_sorted(self.values)
+        return self._is_sorted
+
+    @property
+    def flat_values(self) -> np.ndarray:
+        """Flattened coordinate values."""
+        if self._flat_values is None:
+            self._flat_values = self.values.ravel()
+        return self._flat_values
 
 
 class NDIndex(Index):
@@ -171,6 +199,9 @@ class NDIndex(Index):
         """
         Find indices in all dimensions for a given value.
 
+        Uses O(log n) binary search when coordinate values are sorted,
+        otherwise falls back to O(n) linear scan.
+
         Parameters
         ----------
         coord_name : str
@@ -187,25 +218,63 @@ class NDIndex(Index):
         """
         ndc = self._nd_coords[coord_name]
         values = ndc.values
+        flat_values = ndc.flat_values
+
+        if ndc.is_sorted:
+            # O(log n) binary search path
+            flat_idx = self._binary_search(flat_values, value, method, coord_name)
+        else:
+            # O(n) linear scan path
+            flat_idx = self._linear_search(values, value, method, coord_name)
+
+        # Convert to multi-dimensional indices
+        indices = np.unravel_index(flat_idx, values.shape)
+
+        return {dim: int(idx) for dim, idx in zip(ndc.dims, indices)}
+
+    def _binary_search(
+        self, flat_values: np.ndarray, value: float, method: str | None, coord_name: str
+    ) -> int:
+        """O(log n) binary search for sorted arrays."""
+        idx = np.searchsorted(flat_values, value)
+        n = len(flat_values)
 
         if method == "nearest":
-            # Find flat index of closest value
-            flat_idx = np.argmin(np.abs(values - value))
+            # Find nearest by checking left and right neighbors
+            if idx == 0:
+                return 0
+            elif idx == n:
+                return n - 1
+            else:
+                left_val = flat_values[idx - 1]
+                right_val = flat_values[idx]
+                if abs(value - left_val) <= abs(value - right_val):
+                    return idx - 1
+                else:
+                    return idx
         else:
-            # Exact match required - use flatnonzero for efficiency
+            # Exact match required
+            if idx < n and flat_values[idx] == value:
+                return idx
+            raise KeyError(
+                f"Value {value!r} not found in coordinate {coord_name!r}. "
+                f"Use method='nearest' for approximate matching."
+            )
+
+    def _linear_search(
+        self, values: np.ndarray, value: float, method: str | None, coord_name: str
+    ) -> int:
+        """O(n) linear scan for unsorted arrays."""
+        if method == "nearest":
+            return int(np.argmin(np.abs(values - value)))
+        else:
             flat_matches = np.flatnonzero(values == value)
             if len(flat_matches) == 0:
                 raise KeyError(
                     f"Value {value!r} not found in coordinate {coord_name!r}. "
                     f"Use method='nearest' for approximate matching."
                 )
-            # Use the first match
-            flat_idx = flat_matches[0]
-
-        # Convert to multi-dimensional indices
-        indices = np.unravel_index(flat_idx, values.shape)
-
-        return {dim: int(idx) for dim, idx in zip(ndc.dims, indices)}
+            return int(flat_matches[0])
 
     def _find_slices_for_range(
         self,
@@ -217,6 +286,9 @@ class NDIndex(Index):
     ) -> dict[str, slice]:
         """
         Find slices in all dimensions for a value range.
+
+        Uses O(log n + k) binary search when coordinate values are sorted
+        (where k is the number of matching cells), otherwise O(n) linear scan.
 
         Parameters
         ----------
@@ -240,7 +312,38 @@ class NDIndex(Index):
         values = ndc.values
         method = slice_method or self._slice_method
 
-        # Find cells in range
+        if ndc.is_sorted:
+            # O(log n + k) path: use binary search to find range bounds
+            flat_values = ndc.flat_values
+            left_idx = np.searchsorted(flat_values, start, side="left")
+            right_idx = np.searchsorted(flat_values, stop, side="right")
+
+            if left_idx >= right_idx:
+                # No values in range
+                return {dim: slice(0, 0) for dim in ndc.dims}
+
+            # Get flat indices of matching cells
+            flat_indices = np.arange(left_idx, right_idx)
+
+            # Convert to multi-dimensional indices
+            multi_indices = np.unravel_index(flat_indices, values.shape)
+
+            # Compute bounding box from multi-dim indices
+            result = {}
+            for i, dim in enumerate(ndc.dims):
+                dim_indices = multi_indices[i]
+                result[dim] = slice(int(dim_indices.min()), int(dim_indices.max()) + 1)
+
+            # Apply step to innermost dimension
+            if step is not None and step != 1:
+                inner_dim = ndc.dims[-1]
+                if inner_dim in result:
+                    s = result[inner_dim]
+                    result[inner_dim] = slice(s.start, s.stop, step)
+
+            return result
+
+        # O(n) path: scan all values
         in_range = (values >= start) & (values <= stop)
 
         if not np.any(in_range):
