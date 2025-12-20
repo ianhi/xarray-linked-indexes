@@ -704,10 +704,12 @@ class DimensionInterval(Index):
         cont_min, cont_max = cont_idx.min(), cont_idx.max()
 
         html_parts.append("<table>")
-        html_parts.append('<tr><th colspan="2" class="section-header">Continuous Dimension</th></tr>')
+        html_parts.append(
+            '<tr><th colspan="2" class="section-header">Continuous Dimension</th></tr>'
+        )
         html_parts.append(
             f'<tr><td><span class="dim-name">{self._continuous_name}</span></td>'
-            f'<td>size: {cont_size}, '
+            f"<td>size: {cont_size}, "
             f'<span class="range">range: [{cont_min:.4g}, {cont_max:.4g}]</span></td></tr>'
         )
         html_parts.append("</table>")
@@ -734,7 +736,9 @@ class DimensionInterval(Index):
                     else f'<span class="coord-name">{info.coord_name}</span>'
                 )
 
-                label_names = list(info.label_indexes.keys()) if info.label_indexes else []
+                label_names = (
+                    list(info.label_indexes.keys()) if info.label_indexes else []
+                )
                 labels_display = (
                     f'<span class="label-list">{", ".join(label_names)}</span>'
                     if label_names
@@ -742,7 +746,7 @@ class DimensionInterval(Index):
                 )
 
                 html_parts.append(
-                    f'<tr>'
+                    f"<tr>"
                     f'<td><span class="dim-name">{dim_name}</span></td>'
                     f"<td>{coord_display}</td>"
                     f'<td>{int_size} / <span class="range">[{int_min:.4g}, {int_max:.4g})</span> '

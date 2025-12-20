@@ -484,12 +484,12 @@ class NDIndex(Index):
                 val_max = ndc.values.max()
 
                 html_parts.append(
-                    f'<tr>'
+                    f"<tr>"
                     f'<td><span class="coord-name">{name}</span></td>'
                     f'<td><span class="dims">({dims_str})</span></td>'
                     f'<td><span class="shape">({shape_str})</span></td>'
                     f'<td><span class="range">[{val_min:.4g}, {val_max:.4g}]</span></td>'
-                    f'</tr>'
+                    f"</tr>"
                 )
 
             html_parts.append("</table>")
