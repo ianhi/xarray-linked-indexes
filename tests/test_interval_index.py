@@ -1188,7 +1188,7 @@ class TestDimensionIntervalCoverageGaps:
         )
         capsys.readouterr()  # Clear creation output
 
-        ds.sel(word="hello")
+        ds.sel(word="red")  # word labels are red, green, blue
         captured = capsys.readouterr()
         assert "DEBUG sel:" in captured.out
 
