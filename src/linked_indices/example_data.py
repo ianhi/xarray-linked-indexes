@@ -716,7 +716,9 @@ def create_trial_ndindex_dataset(n_trials: int, n_times: int) -> "xr.Dataset":
     --------
     >>> from linked_indices.example_data import create_trial_ndindex_dataset
     >>> ds = create_trial_ndindex_dataset(10, 100)
-    >>> ds.sel(abs_time=0.5, method="nearest")  # Select by absolute time
+    >>> result = ds.sel(abs_time=0.5, method="nearest")  # Select by absolute time
+    >>> result.sizes['trial']
+    1
     """
     import xarray as xr
 
@@ -762,7 +764,9 @@ def create_diagonal_dataset(ny: int, nx: int) -> "xr.Dataset":
     --------
     >>> from linked_indices.example_data import create_diagonal_dataset
     >>> ds = create_diagonal_dataset(100, 100)
-    >>> ds.sel(derived=50, method="nearest")
+    >>> result = ds.sel(derived=50, method="nearest")
+    >>> int(result.derived)
+    50
     """
     import xarray as xr
 
@@ -811,7 +815,9 @@ def create_radial_dataset(ny: int, nx: int) -> "xr.Dataset":
     --------
     >>> from linked_indices.example_data import create_radial_dataset
     >>> ds = create_radial_dataset(100, 100)
-    >>> ds.sel(radius=slice(10, 20))  # Select an annulus
+    >>> result = ds.sel(radius=slice(10, 20))  # Select an annulus
+    >>> result.sizes['y'] > 0 and result.sizes['x'] > 0
+    True
     """
     import xarray as xr
 
@@ -861,7 +867,9 @@ def create_jittered_dataset(
     --------
     >>> from linked_indices.example_data import create_jittered_dataset
     >>> ds = create_jittered_dataset(10, 100, jitter_std=0.2)
-    >>> ds.sel(abs_time=0.5, method="nearest")
+    >>> result = ds.sel(abs_time=0.5, method="nearest")
+    >>> result.sizes['trial']
+    1
     """
     import xarray as xr
 
