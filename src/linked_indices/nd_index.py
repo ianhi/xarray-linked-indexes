@@ -110,7 +110,9 @@ class NDIndex(Index):
     >>> from linked_indices.example_data import trial_based_dataset
     >>> ds = trial_based_dataset(mode="stacked")
     >>> ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
-    >>> ds_indexed.sel(abs_time=7.5)  # Finds trial=1, rel_time=2.5
+    >>> result = ds_indexed.sel(abs_time=7.5)  # Finds trial=1, rel_time=2.5
+    >>> float(result.abs_time)
+    7.5
     """
 
     _nd_coords: dict[str, NDCoord]
@@ -622,11 +624,24 @@ class NDIndex(Index):
 
         Examples
         --------
-        >>> # Mask values outside [1.0, 2.0] with NaN
-        >>> result = index.sel_masked(ds, {'abs_time': slice(1.0, 2.0)}, returns='mask')
+        >>> from linked_indices import NDIndex
+        >>> from linked_indices.example_data import trial_based_dataset
+        >>> ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=1)
+        >>> ds = ds.set_xindex(['abs_time'], NDIndex)
+        >>> index = ds.xindexes['abs_time']
 
-        >>> # Add boolean coordinate showing which cells are in range
-        >>> result = index.sel_masked(ds, {'abs_time': slice(1.0, 2.0)}, returns='metadata')
+        Mask values outside [1, 8] with NaN:
+
+        >>> result = index.sel_masked(ds, {'abs_time': slice(1, 8)}, returns='mask')
+        >>> import numpy as np
+        >>> bool(np.any(np.isnan(result['data'].values)))
+        True
+
+        Add boolean coordinate showing which cells are in range:
+
+        >>> result = index.sel_masked(ds, {'abs_time': slice(1, 8)}, returns='metadata')
+        >>> 'in_abs_time_range' in result.coords
+        True
         """
         if returns not in RETURNS_MODES:
             raise ValueError(
@@ -784,18 +799,29 @@ def nd_sel(
 
     Examples
     --------
-    >>> from linked_indices import nd_sel
-    >>> # Standard slice selection (equivalent to ds.sel())
-    >>> result = nd_sel(ds, abs_time=slice(1.0, 2.0))
+    >>> from linked_indices import nd_sel, NDIndex
+    >>> from linked_indices.example_data import trial_based_dataset
+    >>> ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=1)
+    >>> ds = ds.set_xindex(['abs_time'], NDIndex)
 
-    >>> # Mask values outside range with NaN
-    >>> result = nd_sel(ds, abs_time=slice(1.0, 2.0), returns='mask')
+    Standard slice selection (equivalent to ds.sel()):
 
-    >>> # Add boolean coordinate showing membership
-    >>> result = nd_sel(ds, abs_time=slice(1.0, 2.0), returns='metadata')
+    >>> result = nd_sel(ds, abs_time=slice(1, 8), returns='slice')
+    >>> result.sizes['trial']
+    2
 
-    >>> # Combine with method='nearest'
-    >>> result = nd_sel(ds, abs_time=slice(0.95, 2.1), method='nearest', returns='mask')
+    Mask values outside range with NaN:
+
+    >>> import numpy as np
+    >>> result = nd_sel(ds, abs_time=slice(1, 8), returns='mask')
+    >>> bool(np.any(np.isnan(result['data'].values)))
+    True
+
+    Add boolean coordinate showing membership:
+
+    >>> result = nd_sel(ds, abs_time=slice(1, 8), returns='metadata')
+    >>> 'in_abs_time_range' in result.coords
+    True
     """
     # Merge labels dict with kwargs
     if labels is None:

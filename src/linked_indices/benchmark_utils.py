@@ -129,9 +129,13 @@ def benchmark_selection_scaling(
     >>> from linked_indices.example_data import create_trial_ndindex_dataset
     >>> results = benchmark_selection_scaling(
     ...     create_trial_ndindex_dataset,
-    ...     sizes=[(10, 100), (100, 1000)],
-    ...     print_results=True,
+    ...     sizes=[(10, 100)],
+    ...     print_results=False,
     ... )
+    >>> len(results)
+    1
+    >>> 'index_ms' in results[0] and 'warm_ms' in results[0]
+    True
     """
     results = []
 
