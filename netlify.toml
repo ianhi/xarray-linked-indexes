@@ -1,6 +1,12 @@
 [build]
   base = "docs"
-  command = "npm install -g mystmd && myst build --html"
+  command = """
+curl -LsSf https://astral.sh/uv/install.sh | sh && \
+source $HOME/.local/bin/env && \
+cd .. && uv sync && cd docs && \
+npm install -g mystmd && \
+uv run myst build --html --execute
+"""
   publish = "_build/html"
   # Always build - docs depend on source files outside docs/
   ignore = "exit 1"
