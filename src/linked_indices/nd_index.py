@@ -192,15 +192,15 @@ class NDIndex(Index):
             # Find flat index of closest value
             flat_idx = np.argmin(np.abs(values - value))
         else:
-            # Exact match required
-            matches = np.where(values == value)
-            if len(matches[0]) == 0:
+            # Exact match required - use flatnonzero for efficiency
+            flat_matches = np.flatnonzero(values == value)
+            if len(flat_matches) == 0:
                 raise KeyError(
                     f"Value {value!r} not found in coordinate {coord_name!r}. "
                     f"Use method='nearest' for approximate matching."
                 )
             # Use the first match
-            flat_idx = np.ravel_multi_index(tuple(m[0] for m in matches), values.shape)
+            flat_idx = flat_matches[0]
 
         # Convert to multi-dimensional indices
         indices = np.unravel_index(flat_idx, values.shape)

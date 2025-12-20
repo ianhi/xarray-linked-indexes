@@ -25,6 +25,11 @@ __all__ = [
     "multi_interval_dataset",
     "onset_duration_dataset",
     "trial_based_dataset",
+    # NDIndex benchmark dataset generators
+    "create_trial_ndindex_dataset",
+    "create_diagonal_dataset",
+    "create_radial_dataset",
+    "create_jittered_dataset",
 ]
 
 
@@ -680,3 +685,211 @@ def trial_based_dataset(
         )
 
     return ds
+
+
+# =============================================================================
+# NDIndex benchmark dataset generators
+# =============================================================================
+
+
+def create_trial_ndindex_dataset(n_trials: int, n_times: int) -> "xr.Dataset":
+    """
+    Create trial-based dataset with abs_time = trial_onset + rel_time.
+
+    This is the typical neuroscience use case: multiple trials with
+    overlapping relative time but different absolute time ranges.
+    Returns a dataset with NDIndex already set on abs_time.
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of trials.
+    n_times : int
+        Number of time points per trial.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with NDIndex set on abs_time coordinate.
+
+    Examples
+    --------
+    >>> from linked_indices.example_data import create_trial_ndindex_dataset
+    >>> ds = create_trial_ndindex_dataset(10, 100)
+    >>> ds.sel(abs_time=0.5, method="nearest")  # Select by absolute time
+    """
+    import xarray as xr
+
+    from linked_indices import NDIndex
+
+    trial_onsets = np.arange(n_trials) * n_times * 0.01
+    rel_time = np.linspace(0, n_times * 0.01, n_times)
+    abs_time = trial_onsets[:, np.newaxis] + rel_time[np.newaxis, :]
+    data = np.random.randn(n_trials, n_times)
+
+    ds = xr.Dataset(
+        {"data": (["trial", "rel_time"], data)},
+        coords={
+            "trial": np.arange(n_trials),
+            "rel_time": rel_time,
+            "abs_time": (["trial", "rel_time"], abs_time),
+        },
+    )
+    return ds.set_xindex(["abs_time"], NDIndex)
+
+
+def create_diagonal_dataset(ny: int, nx: int) -> "xr.Dataset":
+    """
+    Create image-like dataset with diagonal gradient coordinate.
+
+    This is from the slicing gallery: derived[y, x] = y_offset[y] + x_coord[x]
+    Similar structure to trial data but with different scale/semantics.
+    Returns a dataset with NDIndex already set on the derived coordinate.
+
+    Parameters
+    ----------
+    ny : int
+        Number of y (row) coordinates.
+    nx : int
+        Number of x (column) coordinates.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with NDIndex set on derived coordinate.
+
+    Examples
+    --------
+    >>> from linked_indices.example_data import create_diagonal_dataset
+    >>> ds = create_diagonal_dataset(100, 100)
+    >>> ds.sel(derived=50, method="nearest")
+    """
+    import xarray as xr
+
+    from linked_indices import NDIndex
+
+    y_coord = np.arange(ny)
+    x_coord = np.arange(nx)
+
+    # Diagonal gradient: each row starts 2 units higher
+    y_offset = y_coord * 2
+    derived_coord = y_offset[:, np.newaxis] + x_coord[np.newaxis, :]
+    data = np.random.randn(ny, nx)
+
+    ds = xr.Dataset(
+        {"data": (["y", "x"], data)},
+        coords={
+            "y": y_coord,
+            "x": x_coord,
+            "derived": (["y", "x"], derived_coord),
+        },
+    )
+    return ds.set_xindex(["derived"], NDIndex)
+
+
+def create_radial_dataset(ny: int, nx: int) -> "xr.Dataset":
+    """
+    Create image-like dataset with radial coordinate (non-linear 2D).
+
+    This tests performance with non-monotonic, complex coordinate patterns.
+    The radius coordinate is the distance from the center of the array.
+    Returns a dataset with NDIndex already set on the radius coordinate.
+
+    Parameters
+    ----------
+    ny : int
+        Number of y (row) coordinates.
+    nx : int
+        Number of x (column) coordinates.
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with NDIndex set on radius coordinate.
+
+    Examples
+    --------
+    >>> from linked_indices.example_data import create_radial_dataset
+    >>> ds = create_radial_dataset(100, 100)
+    >>> ds.sel(radius=slice(10, 20))  # Select an annulus
+    """
+    import xarray as xr
+
+    from linked_indices import NDIndex
+
+    cy, cx = ny // 2, nx // 2
+    yy, xx = np.meshgrid(np.arange(ny) - cy, np.arange(nx) - cx, indexing="ij")
+    radius = np.sqrt(xx**2 + yy**2)
+    data = np.random.randn(ny, nx)
+
+    ds = xr.Dataset(
+        {"data": (["y", "x"], data)},
+        coords={
+            "y": np.arange(ny),
+            "x": np.arange(nx),
+            "radius": (["y", "x"], radius),
+        },
+    )
+    return ds.set_xindex(["radius"], NDIndex)
+
+
+def create_jittered_dataset(
+    n_trials: int, n_times: int, jitter_std: float = 0.1
+) -> "xr.Dataset":
+    """
+    Create trial dataset with per-trial timing jitter.
+
+    More realistic: trial onsets have random variation, and sampling
+    times have small per-sample jitter (like real physiological recordings).
+    Returns a dataset with NDIndex already set on abs_time.
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of trials.
+    n_times : int
+        Number of time points per trial.
+    jitter_std : float
+        Standard deviation of timing jitter. Default: 0.1
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with NDIndex set on abs_time coordinate.
+
+    Examples
+    --------
+    >>> from linked_indices.example_data import create_jittered_dataset
+    >>> ds = create_jittered_dataset(10, 100, jitter_std=0.2)
+    >>> ds.sel(abs_time=0.5, method="nearest")
+    """
+    import xarray as xr
+
+    from linked_indices import NDIndex
+
+    np.random.seed(42)  # Reproducible
+
+    # Trial onsets with jitter
+    base_onsets = np.arange(n_trials) * n_times * 0.01
+    trial_onsets = base_onsets + np.random.randn(n_trials) * jitter_std
+    trial_onsets[0] = 0  # First trial starts at 0
+
+    # Per-sample timing jitter within each trial
+    base_rel_time = np.linspace(0, n_times * 0.01, n_times)
+    rel_time_jitter = np.random.randn(n_trials, n_times) * (jitter_std * 0.01)
+
+    # 2D absolute time with jitter
+    abs_time = (
+        trial_onsets[:, np.newaxis] + base_rel_time[np.newaxis, :] + rel_time_jitter
+    )
+    data = np.random.randn(n_trials, n_times)
+
+    ds = xr.Dataset(
+        {"data": (["trial", "rel_time"], data)},
+        coords={
+            "trial": np.arange(n_trials),
+            "rel_time": base_rel_time,
+            "abs_time": (["trial", "rel_time"], abs_time),
+        },
+    )
+    return ds.set_xindex(["abs_time"], NDIndex)
