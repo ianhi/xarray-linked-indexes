@@ -631,6 +631,131 @@ class DimensionInterval(Index):
         # and dims of the DataArray (not the coord). We always return True for now.
         return True
 
+    def __repr__(self) -> str:
+        """Return a string representation of the DimensionInterval index."""
+        lines = [f"<{self.__class__.__name__}>"]
+
+        # Continuous dimension info
+        cont_idx = self._continuous_index.index
+        cont_size = len(cont_idx)
+        cont_min, cont_max = cont_idx.min(), cont_idx.max()
+        lines.append(f"  Continuous: {self._continuous_name}")
+        lines.append(f"    size: {cont_size}, range: [{cont_min:.4g}, {cont_max:.4g}]")
+
+        # Interval dimensions
+        if self._interval_dims:
+            lines.append("  Interval dimensions:")
+            for dim_name, info in self._interval_dims.items():
+                interval_idx = info.interval_index.index
+                int_size = len(interval_idx)
+                int_min = interval_idx[0].left
+                int_max = interval_idx[-1].right
+
+                # Determine source (onset/duration or explicit intervals)
+                source = "(from onset/duration)" if info.from_onset_duration else ""
+
+                lines.append(f"    {dim_name}: {source}".rstrip())
+                if not info.from_onset_duration:
+                    lines.append(f"      coord: {info.coord_name}")
+                lines.append(
+                    f"      size: {int_size}, "
+                    f"range: [{int_min:.4g}, {int_max:.4g}), "
+                    f"closed: {interval_idx.closed!r}"
+                )
+
+                # Label coordinates
+                if info.label_indexes:
+                    label_names = list(info.label_indexes.keys())
+                    lines.append(f"      labels: {label_names}")
+
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        """Return an HTML representation of the DimensionInterval index."""
+        # CSS styles for the repr
+        style = """
+        <style>
+            .di-repr { font-family: monospace; font-size: 13px; }
+            .di-repr table { border-collapse: collapse; margin: 8px 0; }
+            .di-repr th, .di-repr td {
+                padding: 4px 12px;
+                text-align: left;
+                border: 1px solid #ddd;
+            }
+            .di-repr th { background-color: #f5f5f5; font-weight: bold; }
+            .di-repr .section-header {
+                background-color: #e8e8e8;
+                font-weight: bold;
+                padding: 6px 12px;
+            }
+            .di-repr .dim-name { color: #0066cc; font-weight: bold; }
+            .di-repr .coord-name { color: #666; }
+            .di-repr .range { color: #228b22; }
+            .di-repr .label-list { color: #8b4513; font-style: italic; }
+        </style>
+        """
+
+        html_parts = [style, '<div class="di-repr">']
+        html_parts.append(f"<strong>&lt;{self.__class__.__name__}&gt;</strong>")
+
+        # Continuous dimension table
+        cont_idx = self._continuous_index.index
+        cont_size = len(cont_idx)
+        cont_min, cont_max = cont_idx.min(), cont_idx.max()
+
+        html_parts.append("<table>")
+        html_parts.append('<tr><th colspan="2" class="section-header">Continuous Dimension</th></tr>')
+        html_parts.append(
+            f'<tr><td><span class="dim-name">{self._continuous_name}</span></td>'
+            f'<td>size: {cont_size}, '
+            f'<span class="range">range: [{cont_min:.4g}, {cont_max:.4g}]</span></td></tr>'
+        )
+        html_parts.append("</table>")
+
+        # Interval dimensions table
+        if self._interval_dims:
+            html_parts.append("<table>")
+            html_parts.append(
+                '<tr><th colspan="4" class="section-header">Interval Dimensions</th></tr>'
+            )
+            html_parts.append(
+                "<tr><th>Dimension</th><th>Coord</th><th>Size / Range</th><th>Labels</th></tr>"
+            )
+
+            for dim_name, info in self._interval_dims.items():
+                interval_idx = info.interval_index.index
+                int_size = len(interval_idx)
+                int_min = interval_idx[0].left
+                int_max = interval_idx[-1].right
+
+                coord_display = (
+                    "<em>(onset/duration)</em>"
+                    if info.from_onset_duration
+                    else f'<span class="coord-name">{info.coord_name}</span>'
+                )
+
+                label_names = list(info.label_indexes.keys()) if info.label_indexes else []
+                labels_display = (
+                    f'<span class="label-list">{", ".join(label_names)}</span>'
+                    if label_names
+                    else "—"
+                )
+
+                html_parts.append(
+                    f'<tr>'
+                    f'<td><span class="dim-name">{dim_name}</span></td>'
+                    f"<td>{coord_display}</td>"
+                    f'<td>{int_size} / <span class="range">[{int_min:.4g}, {int_max:.4g})</span> '
+                    f"({interval_idx.closed})</td>"
+                    f"<td>{labels_display}</td>"
+                    f"</tr>"
+                )
+
+            html_parts.append("</table>")
+
+        html_parts.append("</div>")
+        return "".join(html_parts)
+
     def sel(self, labels, method=None, tolerance=None):
         """Label-based indexing on the dataset.
 

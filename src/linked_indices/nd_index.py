@@ -413,3 +413,86 @@ class NDIndex(Index):
     def should_add_coord_to_array(self, name, var, dims) -> bool:
         """Whether to add a coordinate to a DataArray."""
         return True
+
+    def __repr__(self) -> str:
+        """Return a string representation of the NDIndex."""
+        lines = [f"<{self.__class__.__name__}>"]
+        lines.append(f"  slice_method: {self._slice_method!r}")
+
+        if self._nd_coords:
+            lines.append("  Coordinates:")
+            for name, ndc in self._nd_coords.items():
+                shape_str = " × ".join(str(s) for s in ndc.values.shape)
+                dims_str = ", ".join(ndc.dims)
+
+                # Value range
+                val_min = ndc.values.min()
+                val_max = ndc.values.max()
+
+                lines.append(f"    {name}:")
+                lines.append(f"      dims: ({dims_str})")
+                lines.append(f"      shape: ({shape_str})")
+                lines.append(f"      range: [{val_min:.4g}, {val_max:.4g}]")
+
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        """Return an HTML representation of the NDIndex."""
+        # CSS styles for the repr
+        style = """
+        <style>
+            .nd-repr { font-family: monospace; font-size: 13px; }
+            .nd-repr table { border-collapse: collapse; margin: 8px 0; }
+            .nd-repr th, .nd-repr td {
+                padding: 4px 12px;
+                text-align: left;
+                border: 1px solid #ddd;
+            }
+            .nd-repr th { background-color: #f5f5f5; font-weight: bold; }
+            .nd-repr .section-header {
+                background-color: #e8e8e8;
+                font-weight: bold;
+                padding: 6px 12px;
+            }
+            .nd-repr .coord-name { color: #0066cc; font-weight: bold; }
+            .nd-repr .dims { color: #666; }
+            .nd-repr .shape { color: #8b008b; }
+            .nd-repr .range { color: #228b22; }
+            .nd-repr .method { color: #8b4513; font-style: italic; }
+        </style>
+        """
+
+        html_parts = [style, '<div class="nd-repr">']
+        html_parts.append(
+            f"<strong>&lt;{self.__class__.__name__}&gt;</strong> "
+            f'<span class="method">(slice_method: {self._slice_method!r})</span>'
+        )
+
+        if self._nd_coords:
+            html_parts.append("<table>")
+            html_parts.append(
+                '<tr><th colspan="4" class="section-header">N-D Coordinates</th></tr>'
+            )
+            html_parts.append(
+                "<tr><th>Coordinate</th><th>Dimensions</th><th>Shape</th><th>Range</th></tr>"
+            )
+
+            for name, ndc in self._nd_coords.items():
+                shape_str = " × ".join(str(s) for s in ndc.values.shape)
+                dims_str = ", ".join(ndc.dims)
+                val_min = ndc.values.min()
+                val_max = ndc.values.max()
+
+                html_parts.append(
+                    f'<tr>'
+                    f'<td><span class="coord-name">{name}</span></td>'
+                    f'<td><span class="dims">({dims_str})</span></td>'
+                    f'<td><span class="shape">({shape_str})</span></td>'
+                    f'<td><span class="range">[{val_min:.4g}, {val_max:.4g}]</span></td>'
+                    f'</tr>'
+                )
+
+            html_parts.append("</table>")
+
+        html_parts.append("</div>")
+        return "".join(html_parts)
