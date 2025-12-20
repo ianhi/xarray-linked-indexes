@@ -2,6 +2,8 @@
   base = "docs"
   command = "npm install -g mystmd && myst build --html"
   publish = "_build/html"
+  # Always build - docs depend on source files outside docs/
+  ignore = "exit 1"
 
 [build.environment]
   NODE_VERSION = "20"
