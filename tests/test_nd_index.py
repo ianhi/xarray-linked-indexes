@@ -1370,3 +1370,55 @@ class TestNDIndexMain:
         main()
         captured = capsys.readouterr()
         assert "Hello from linked-indices" in captured.out
+
+
+class TestNDIndexAdditionalCoverage:
+    """Additional tests for remaining coverage gaps."""
+
+    def test_slice_nearest_reversed_bounds(self):
+        """slice with method='nearest' where stop < start in coordinate."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use a reverse slice (larger to smaller) with nearest
+        # This should swap internally to find correct bounds
+        result = ds_indexed.sel(abs_time=slice(8, 2), method="nearest")
+        # Should still return some data
+        assert result.sizes["trial"] >= 1
+
+    def test_compute_range_mask_sorted_nearest(self):
+        """_compute_range_mask with sorted coord and method='nearest'."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use mask mode with nearest on sorted data
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(2.5, 7.5),
+            method="nearest",
+            returns="mask",
+        )
+
+        # Should work and have NaN masking
+        assert result is not None
+        assert np.any(np.isnan(result["data"].values))
+
+    def test_sel_with_open_ended_slice_start(self):
+        """Slice with None start uses coordinate minimum."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # slice(None, 5) means from minimum to 5
+        result = ds_indexed.sel(abs_time=slice(None, 5))
+        assert result.sizes["trial"] >= 1
+
+    def test_sel_with_open_ended_slice_stop(self):
+        """Slice with None stop uses coordinate maximum."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # slice(10, None) means from 10 to maximum
+        result = ds_indexed.sel(abs_time=slice(10, None))
+        assert result.sizes["trial"] >= 1
