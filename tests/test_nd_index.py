@@ -888,3 +888,295 @@ class TestNDIndexBoundingBoxBehavior:
         assert result.trial.values == "cosine"
         # sawtooth (10-15) should definitely be excluded
         assert "sawtooth" not in result.trial.values
+
+
+class TestNDIndexSliceMethodNearest:
+    """Tests for slice selection with method='nearest'."""
+
+    @pytest.fixture
+    def ds_indexed(self):
+        """Create a simple dataset with known abs_time values."""
+        # 3 trials, 5 time points each
+        # Trial 0: abs_time = 0, 1, 2, 3, 4
+        # Trial 1: abs_time = 10, 11, 12, 13, 14
+        # Trial 2: abs_time = 20, 21, 22, 23, 24
+        trial_onsets = np.array([0, 10, 20])
+        rel_time = np.arange(5, dtype=float)
+        abs_time = trial_onsets[:, np.newaxis] + rel_time[np.newaxis, :]
+        data = np.arange(15).reshape(3, 5).astype(float)
+
+        ds = xr.Dataset(
+            {"data": (["trial", "rel_time"], data)},
+            coords={
+                "trial": np.arange(3),
+                "rel_time": rel_time,
+                "abs_time": (["trial", "rel_time"], abs_time),
+            },
+        )
+        return ds.set_xindex(["abs_time"], NDIndex)
+
+    def test_slice_nearest_exact_boundaries(self, ds_indexed):
+        """When boundaries exist exactly, nearest gives same result as default."""
+        result_exact = ds_indexed.sel(abs_time=slice(1.0, 3.0))
+        result_nearest = ds_indexed.sel(abs_time=slice(1.0, 3.0), method="nearest")
+
+        # Should get the same result
+        np.testing.assert_array_equal(
+            result_exact.data.values, result_nearest.data.values
+        )
+
+    def test_slice_nearest_non_exact_boundaries(self, ds_indexed):
+        """Nearest finds closest values when exact boundaries don't exist."""
+        # Slice from 0.6 to 3.4 - should snap to nearest: 1 and 3
+        result = ds_indexed.sel(abs_time=slice(0.6, 3.4), method="nearest")
+
+        # Should include values from 1 to 3
+        assert 1.0 in result.abs_time.values
+        assert 3.0 in result.abs_time.values
+
+    def test_slice_nearest_outside_range_snaps_to_edge(self, ds_indexed):
+        """Nearest snaps to edge when boundaries are outside data range."""
+        # Slice from -5 to 2 - start should snap to 0
+        result = ds_indexed.sel(abs_time=slice(-5.0, 2.0), method="nearest")
+
+        # Should include the start of the data
+        assert 0.0 in result.abs_time.values
+
+    def test_slice_nearest_spanning_trials(self, ds_indexed):
+        """Nearest works across trial boundaries."""
+        # Slice from 3.7 to 10.3 - should snap to 4 and 10
+        result = ds_indexed.sel(abs_time=slice(3.7, 10.3), method="nearest")
+
+        # Should include both trials 0 and 1
+        assert result.sizes["trial"] >= 2
+        assert 4.0 in result.abs_time.values
+        assert 10.0 in result.abs_time.values
+
+    def test_slice_nearest_swapped_boundaries(self, ds_indexed):
+        """Nearest handles when start nearest > stop nearest."""
+        # Both 9.9 and 10.1 snap to 10
+        # Result should be a single point or small range
+        result = ds_indexed.sel(abs_time=slice(9.9, 10.1), method="nearest")
+
+        assert 10.0 in result.abs_time.values
+
+    def test_slice_nearest_single_point(self, ds_indexed):
+        """Nearest with very narrow range still returns valid slice."""
+        # Slice from 5.0 to 5.0 - but 5.0 doesn't exist, nearest is 4
+        result = ds_indexed.sel(abs_time=slice(5.0, 5.0), method="nearest")
+
+        # Should return something (the nearest point)
+        assert result.sizes["trial"] >= 1
+
+    def test_slice_nearest_with_step(self, ds_indexed):
+        """Nearest works with step parameter."""
+        result = ds_indexed.sel(abs_time=slice(0.5, 3.5, 2), method="nearest")
+
+        # Should have applied step to the slice
+        assert result.sizes["rel_time"] <= 3  # step=2 reduces points
+
+
+class TestNDIndexSliceMethodNearestUnsorted:
+    """Tests for slice selection with method='nearest' on unsorted coords."""
+
+    @pytest.fixture
+    def ds_unsorted(self):
+        """Create a dataset with unsorted abs_time values (forced unsorted path)."""
+        # Use a radial pattern that's naturally unsorted
+        x = np.linspace(-2, 2, 5)
+        y = np.linspace(-2, 2, 4)
+        X, Y = np.meshgrid(x, y)
+        radius = np.sqrt(X**2 + Y**2)
+        data = np.sin(radius)
+
+        ds = xr.Dataset(
+            {"data": (["y", "x"], data)},
+            coords={
+                "x": x,
+                "y": y,
+                "radius": (["y", "x"], radius),
+            },
+        )
+        ds_indexed = ds.set_xindex(["radius"], NDIndex)
+        # Verify it's unsorted
+        idx = ds_indexed.xindexes["radius"]
+        coord = idx._nd_coords["radius"]
+        assert not coord.is_sorted, "Expected unsorted coordinate"
+        return ds_indexed
+
+    def test_slice_nearest_unsorted(self, ds_unsorted):
+        """Nearest works on unsorted coordinates."""
+        # Find nearest to radius 1.0 - 1.5
+        result = ds_unsorted.sel(radius=slice(1.0, 1.5), method="nearest")
+
+        # Should return valid result
+        assert result.sizes["y"] >= 1
+        assert result.sizes["x"] >= 1
+
+    def test_slice_nearest_unsorted_vs_default(self, ds_unsorted):
+        """Nearest and default may give different results on unsorted."""
+        # With exact boundaries that exist
+        result_default = ds_unsorted.sel(radius=slice(0.0, 2.0))
+        result_nearest = ds_unsorted.sel(radius=slice(0.1, 1.9), method="nearest")
+
+        # Both should return valid results (may differ)
+        assert result_default.sizes["y"] >= 1
+        assert result_nearest.sizes["y"] >= 1
+
+
+class TestNDIndexMaskedSelection:
+    """Tests for masked and metadata selection modes."""
+
+    @pytest.fixture
+    def ds_indexed(self):
+        """Create a trial-based dataset with varying values per trial."""
+        # Create dataset where each trial has different abs_time values
+        # Trial 0: 0-5s -> abs_time 10-15
+        # Trial 1: 0-5s -> abs_time 20-25
+        # Trial 2: 0-5s -> abs_time 30-35
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=1)
+        return ds.set_xindex(["abs_time"], NDIndex)
+
+    def test_returns_slice_same_as_sel(self, ds_indexed):
+        """returns='slice' produces same result as regular sel()."""
+        from linked_indices import nd_sel
+
+        result_sel = ds_indexed.sel(abs_time=slice(11, 14))
+        result_nd_sel = nd_sel(ds_indexed, abs_time=slice(11, 14), returns="slice")
+
+        xr.testing.assert_identical(result_sel, result_nd_sel)
+
+    def test_returns_mask_nan_outside_range(self, ds_indexed):
+        """returns='mask' applies NaN to values outside range."""
+        from linked_indices import nd_sel
+
+        # Select abs_time between 1 and 8 - spans trials 0 and 1
+        # Trial 0: [0, 1, 2, 3, 4] - 0 is outside [1, 8]
+        # Trial 1: [5, 6, 7, 8, 9] - 9 is outside [1, 8]
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="mask")
+
+        # Check that values outside [1, 8] are NaN
+        abs_time_vals = result["abs_time"].values
+        data_vals = result["data"].values
+
+        # Build expected mask
+        mask = (abs_time_vals >= 1) & (abs_time_vals <= 8)
+
+        # NaN where outside range
+        assert np.all(np.isnan(data_vals[~mask]))
+        # Valid data where inside range
+        assert np.all(~np.isnan(data_vals[mask]))
+
+    def test_returns_mask_preserves_coords(self, ds_indexed):
+        """returns='mask' preserves coordinate structure."""
+        from linked_indices import nd_sel
+
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="mask")
+
+        # All coordinates should still exist
+        assert "abs_time" in result.coords
+        assert "trial" in result.coords
+        assert "rel_time" in result.coords
+
+    def test_returns_metadata_adds_bool_coord(self, ds_indexed):
+        """returns='metadata' adds boolean coordinate."""
+        from linked_indices import nd_sel
+
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="metadata")
+
+        # Should have a new coordinate indicating membership
+        assert "in_abs_time_range" in result.coords
+
+        # Check the boolean coordinate has correct values
+        in_range = result["in_abs_time_range"].values
+        abs_time_vals = result["abs_time"].values
+
+        expected = (abs_time_vals >= 1) & (abs_time_vals <= 8)
+        np.testing.assert_array_equal(in_range, expected)
+
+    def test_returns_metadata_preserves_data(self, ds_indexed):
+        """returns='metadata' doesn't modify data values."""
+        from linked_indices import nd_sel
+
+        result_slice = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="slice")
+        result_meta = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="metadata")
+
+        # Data values should be identical (no NaN masking)
+        np.testing.assert_array_equal(
+            result_slice["data"].values, result_meta["data"].values
+        )
+
+    def test_mask_with_method_nearest(self, ds_indexed):
+        """Mask works with method='nearest' for boundaries."""
+        from linked_indices import nd_sel
+
+        # Select 0.7 to 8.2 with nearest - should snap to 1 and 8
+        # Then mask values outside [1, 8]
+        # Trial 0: [0, 1, 2, 3, 4] - 0 is outside
+        # Trial 1: [5, 6, 7, 8, 9] - 9 is outside
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(0.7, 8.2),  # Will snap to 1 and 8
+            method="nearest",
+            returns="mask",
+        )
+
+        # Check masking happened (values 0 and 9 should be NaN)
+        assert np.any(np.isnan(result["data"].values))
+
+    def test_invalid_returns_raises(self, ds_indexed):
+        """Invalid returns value raises error."""
+        from linked_indices import nd_sel
+
+        with pytest.raises(ValueError, match="Invalid returns"):
+            nd_sel(ds_indexed, abs_time=slice(11, 13), returns="invalid")
+
+    def test_nd_sel_fallback_for_non_ndindex(self):
+        """nd_sel falls back to sel() for non-NDIndex coords."""
+        from linked_indices import nd_sel
+
+        # Create simple dataset without NDIndex
+        ds = xr.Dataset(
+            {"data": ("x", [1, 2, 3, 4, 5])},
+            coords={"x": [0, 1, 2, 3, 4]},
+        )
+
+        # returns='slice' should work via fallback
+        result = nd_sel(ds, x=slice(1, 3), returns="slice")
+        assert result.sizes["x"] == 3
+
+    def test_nd_sel_error_mask_without_ndindex(self):
+        """nd_sel raises error for mask mode without NDIndex."""
+        from linked_indices import nd_sel
+
+        ds = xr.Dataset(
+            {"data": ("x", [1, 2, 3, 4, 5])},
+            coords={"x": [0, 1, 2, 3, 4]},
+        )
+
+        with pytest.raises(ValueError, match="No NDIndex found"):
+            nd_sel(ds, x=slice(1, 3), returns="mask")
+
+    def test_sel_masked_via_index(self, ds_indexed):
+        """sel_masked can be called directly on the index."""
+        idx = ds_indexed.xindexes["abs_time"]
+
+        # Select 1 to 8 - spans trials 0 and 1, with some values outside
+        result = idx.sel_masked(ds_indexed, {"abs_time": slice(1, 8)}, returns="mask")
+
+        # Should have NaN masking (values 0 and 9 are outside [1, 8])
+        assert np.any(np.isnan(result["data"].values))
+
+    def test_mask_only_affects_data_vars(self, ds_indexed):
+        """Mask applies to data variables, not coordinates."""
+        from linked_indices import nd_sel
+
+        # Select 1 to 8 - spans trials 0 and 1
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="mask")
+
+        # Coordinate values should not be NaN
+        assert not np.any(np.isnan(result["abs_time"].values))
+        assert not np.any(np.isnan(result["rel_time"].values))
+
+        # But data should have NaN (values 0 and 9 are outside [1, 8])
+        assert np.any(np.isnan(result["data"].values))
