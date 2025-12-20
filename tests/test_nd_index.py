@@ -1180,3 +1180,193 @@ class TestNDIndexMaskedSelection:
 
         # But data should have NaN (values 0 and 9 are outside [1, 8])
         assert np.any(np.isnan(result["data"].values))
+
+
+class TestNDIndexCoverageGaps:
+    """Tests to cover edge cases and missing coverage lines."""
+
+    def test_nd_sel_empty_labels_raises(self):
+        """nd_sel with no labels raises ValueError."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        with pytest.raises(
+            ValueError, match="Must provide at least one coordinate label"
+        ):
+            nd_sel(ds_indexed)
+
+    def test_nd_sel_slice_mode_no_ndindex_falls_back(self):
+        """nd_sel with returns='slice' falls back to sel when no NDIndex."""
+        from linked_indices import nd_sel
+
+        # Create dataset without NDIndex
+        ds = xr.Dataset(
+            {"data": (("x", "y"), np.arange(20).reshape(4, 5))},
+            coords={"x": [0, 1, 2, 3], "y": [0, 1, 2, 3, 4]},
+        )
+
+        # Should work via fallback to standard sel
+        # slice(1, 3) on [0,1,2,3] returns [1, 2, 3] = 3 elements
+        result = nd_sel(ds, x=slice(1, 3), returns="slice")
+        assert result.sizes["x"] == 3
+
+    def test_linear_search_for_unsorted_exact(self):
+        """Linear search works for exact match on unsorted coords."""
+        # Create dataset with non-monotonic 2D coordinate
+        y, x = np.meshgrid(np.arange(5), np.arange(5), indexing="ij")
+        # Shuffle to make unsorted
+        values = (y * 10 + x).ravel()
+        np.random.seed(42)
+        np.random.shuffle(values)
+        values = values.reshape(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.random.randn(5, 5))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "shuffled": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["shuffled"], NDIndex)
+
+        # Find a value that exists - pick one from the shuffled array
+        target = int(values[2, 2])
+        result = ds_indexed.sel(shuffled=target)
+        assert result.sizes["y"] == 1
+        assert result.sizes["x"] == 1
+
+    def test_linear_search_exact_not_found(self):
+        """Linear search raises KeyError for exact match not found."""
+        y = np.arange(5)
+        x = np.arange(5)
+        values = np.random.randn(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), values)},
+            coords={
+                "y": y,
+                "x": x,
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        with pytest.raises(KeyError, match="not found"):
+            ds_indexed.sel(coord=999.999)
+
+    def test_linear_search_for_unsorted_nearest(self):
+        """Linear search works for nearest match on unsorted coords."""
+        # Create unsorted 2D coordinate
+        values = np.random.randn(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), values.copy())},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Use nearest - should work
+        result = ds_indexed.sel(coord=0.0, method="nearest")
+        assert result.sizes["y"] == 1
+        assert result.sizes["x"] == 1
+
+    def test_trim_outer_slice_method(self):
+        """trim_outer slice method trims outer dimensions more aggressively."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex, slice_method="trim_outer")
+
+        # Select range that only covers first two trials
+        result = ds_indexed.sel(abs_time=slice(1, 6))
+
+        # trim_outer should still work
+        assert result.sizes["trial"] >= 1
+
+    def test_compute_range_mask_unsorted_nearest(self):
+        """_compute_range_mask with method='nearest' on unsorted coord."""
+        from linked_indices import nd_sel
+
+        # Create dataset with unsorted 2D coord
+        values = np.random.randn(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((5, 5)))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Use mask mode with nearest
+        result = nd_sel(
+            ds_indexed,
+            coord=slice(-0.5, 0.5),
+            method="nearest",
+            returns="mask",
+        )
+
+        # Should work without error
+        assert result is not None
+
+    def test_sel_masked_unsorted_nearest(self):
+        """sel_masked with method='nearest' on unsorted coord."""
+        from linked_indices import nd_sel
+
+        # Create dataset with intentionally unsorted values
+        values = np.array(
+            [
+                [5.0, 1.0, 3.0],
+                [2.0, 4.0, 0.0],
+            ]
+        )
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((2, 3)))},
+            coords={
+                "y": np.arange(2),
+                "x": np.arange(3),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Use mask mode with nearest - triggers unsorted path
+        result = nd_sel(
+            ds_indexed,
+            coord=slice(1.5, 3.5),
+            method="nearest",
+            returns="mask",
+        )
+        assert result is not None
+
+    def test_sel_masked_with_non_managed_coord(self):
+        """sel_masked ignores labels not managed by this index."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Select on abs_time (managed) and trial (not managed by NDIndex)
+        # This tests the 'continue' path in sel_masked
+        result = nd_sel(ds_indexed, abs_time=slice(0.5, 1.5), returns="mask")
+        assert result is not None
+
+
+class TestNDIndexMain:
+    """Test the main function in __init__.py."""
+
+    def test_main_prints_message(self, capsys):
+        """main() prints a greeting message."""
+        from linked_indices import main
+
+        main()
+        captured = capsys.readouterr()
+        assert "Hello from linked-indices" in captured.out

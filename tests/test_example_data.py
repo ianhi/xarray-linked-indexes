@@ -476,3 +476,174 @@ class TestIterativeApproach:
         assert "word" in ds.dims
         assert "phoneme" in ds.dims
         assert "stimulus" not in ds.dims
+
+
+class TestTrialBasedDatasetCoverageGaps:
+    """Tests for trial_based_dataset coverage gaps."""
+
+    def test_invalid_mode_raises(self):
+        """Invalid mode raises ValueError."""
+        from linked_indices.example_data import trial_based_dataset
+
+        with pytest.raises(ValueError, match="mode must be 'stacked' or 'linear'"):
+            trial_based_dataset(mode="invalid")
+
+    def test_trial_labels_length_mismatch_raises(self):
+        """trial_labels length mismatch raises ValueError."""
+        from linked_indices.example_data import trial_based_dataset
+
+        with pytest.raises(ValueError, match="trial_labels length"):
+            trial_based_dataset(n_trials=3, trial_labels=["a", "b"])
+
+    def test_linear_mode(self):
+        """Linear mode creates 1D dataset."""
+        from linked_indices.example_data import trial_based_dataset
+
+        ds = trial_based_dataset(
+            n_trials=3, trial_length=2.0, sample_rate=10, mode="linear"
+        )
+
+        # Should have 1D structure
+        assert "abs_time" in ds.dims
+        assert "trial" not in ds.dims  # trial is a coord, not a dim
+        assert ds.sizes["abs_time"] == 3 * 20  # 3 trials * 2s * 10Hz
+
+
+class TestNDIndexDatasetCreators:
+    """Tests for NDIndex benchmark dataset creators."""
+
+    def test_create_trial_ndindex_dataset(self):
+        """create_trial_ndindex_dataset returns dataset with NDIndex."""
+        from linked_indices.example_data import create_trial_ndindex_dataset
+        from linked_indices import NDIndex
+
+        ds = create_trial_ndindex_dataset(5, 10)
+
+        assert "abs_time" in ds.coords
+        assert isinstance(ds.xindexes["abs_time"], NDIndex)
+        assert ds.sizes["trial"] == 5
+        assert ds.sizes["rel_time"] == 10
+
+    def test_create_diagonal_dataset(self):
+        """create_diagonal_dataset returns dataset with NDIndex."""
+        from linked_indices.example_data import create_diagonal_dataset
+        from linked_indices import NDIndex
+
+        ds = create_diagonal_dataset(20, 30)
+
+        assert "derived" in ds.coords
+        assert isinstance(ds.xindexes["derived"], NDIndex)
+        assert ds.sizes["y"] == 20
+        assert ds.sizes["x"] == 30
+
+    def test_create_radial_dataset(self):
+        """create_radial_dataset returns dataset with NDIndex."""
+        from linked_indices.example_data import create_radial_dataset
+        from linked_indices import NDIndex
+
+        ds = create_radial_dataset(50, 60)
+
+        assert "radius" in ds.coords
+        assert isinstance(ds.xindexes["radius"], NDIndex)
+        assert ds.sizes["y"] == 50
+        assert ds.sizes["x"] == 60
+
+    def test_create_jittered_dataset(self):
+        """create_jittered_dataset returns dataset with jittered timing."""
+        from linked_indices.example_data import create_jittered_dataset
+        from linked_indices import NDIndex
+
+        ds = create_jittered_dataset(5, 10, jitter_std=0.1)
+
+        assert "abs_time" in ds.coords
+        assert isinstance(ds.xindexes["abs_time"], NDIndex)
+        assert ds.sizes["trial"] == 5
+        assert ds.sizes["rel_time"] == 10
+
+
+class TestBenchmarkUtils:
+    """Tests for benchmark_utils module."""
+
+    def test_timeit_benchmark(self):
+        """timeit_benchmark returns correct structure."""
+        from linked_indices.benchmark_utils import timeit_benchmark
+
+        result = timeit_benchmark(
+            lambda: sum(range(100)),
+            repeat=3,
+        )
+
+        assert "best_ms" in result
+        assert "mean_ms" in result
+        assert "std_ms" in result
+        assert "n_loops" in result
+
+        assert result["best_ms"] > 0
+        assert result["mean_ms"] >= result["best_ms"]
+        assert result["n_loops"] > 0
+
+    def test_benchmark_selection_scaling(self):
+        """benchmark_selection_scaling returns results for each size."""
+        from linked_indices.benchmark_utils import benchmark_selection_scaling
+        from linked_indices.example_data import create_trial_ndindex_dataset
+
+        results = benchmark_selection_scaling(
+            create_trial_ndindex_dataset,
+            sizes=[(5, 10)],
+            print_results=False,
+            cold_repeats=1,
+        )
+
+        assert len(results) == 1
+        result = results[0]
+        assert "n_cells" in result
+        assert "shape" in result
+        assert "index_ms" in result
+        assert "cold_ms" in result
+        assert "warm_ms" in result
+
+    def test_benchmark_selection_scaling_with_method(self):
+        """benchmark_selection_scaling works with method='nearest'."""
+        from linked_indices.benchmark_utils import benchmark_selection_scaling
+        from linked_indices.example_data import create_trial_ndindex_dataset
+
+        results = benchmark_selection_scaling(
+            create_trial_ndindex_dataset,
+            sizes=[(5, 10)],
+            method="nearest",
+            print_results=False,
+            cold_repeats=1,
+        )
+
+        assert len(results) == 1
+
+    def test_benchmark_selection_scaling_force_unsorted(self):
+        """benchmark_selection_scaling works with force_unsorted."""
+        from linked_indices.benchmark_utils import benchmark_selection_scaling
+        from linked_indices.example_data import create_trial_ndindex_dataset
+
+        results = benchmark_selection_scaling(
+            create_trial_ndindex_dataset,
+            sizes=[(5, 10)],
+            force_unsorted=True,
+            print_results=False,
+            cold_repeats=1,
+        )
+
+        assert len(results) == 1
+
+    def test_benchmark_selection_scaling_prints(self, capsys):
+        """benchmark_selection_scaling prints when print_results=True."""
+        from linked_indices.benchmark_utils import benchmark_selection_scaling
+        from linked_indices.example_data import create_trial_ndindex_dataset
+
+        benchmark_selection_scaling(
+            create_trial_ndindex_dataset,
+            sizes=[(5, 10)],
+            print_results=True,
+            cold_repeats=1,
+        )
+
+        captured = capsys.readouterr()
+        assert "Slice Selection" in captured.out
+        assert "Index (ms)" in captured.out

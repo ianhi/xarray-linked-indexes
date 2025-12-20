@@ -1124,3 +1124,76 @@ class TestMixedFormatSelByInterval:
         _ = result * 1
         assert result.sizes["word"] == 1
         assert result.word.values[0] == "green"
+
+
+class TestDimensionIntervalCoverageGaps:
+    """Tests for DimensionInterval coverage gaps."""
+
+    def test_interval_idx_min_max_with_single_interval(self, ds_multi):
+        """_interval_idx_min_max works with single Interval."""
+        import pandas as pd
+
+        idx = ds_multi.xindexes["time"]
+
+        # Get a single interval
+        single = pd.Interval(0.0, 0.5, closed="left")
+        result = idx._interval_idx_min_max(single)
+        assert result.left == 0.0
+        assert result.right == 0.5
+
+    def test_interval_idx_min_max_invalid_type(self, ds_multi):
+        """_interval_idx_min_max raises for invalid type."""
+        idx = ds_multi.xindexes["time"]
+
+        with pytest.raises(TypeError, match="Expected IntervalIndex or Interval"):
+            idx._interval_idx_min_max("not an interval")
+
+    def test_debug_mode_from_variables(self, capsys):
+        """Debug mode prints during from_variables."""
+        from linked_indices.example_data import multi_interval_dataset
+
+        ds = multi_interval_dataset()
+        ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "phoneme_intervals",
+                "word",
+                "part_of_speech",
+                "phoneme",
+            ],
+            DimensionInterval,
+            debug=True,
+        )
+
+        captured = capsys.readouterr()
+        assert "DEBUG from_variables:" in captured.out
+
+    def test_debug_mode_sel(self, capsys):
+        """Debug mode prints during sel."""
+        from linked_indices.example_data import multi_interval_dataset
+
+        ds = multi_interval_dataset()
+        ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "phoneme_intervals",
+                "word",
+                "part_of_speech",
+                "phoneme",
+            ],
+            DimensionInterval,
+            debug=True,
+        )
+        capsys.readouterr()  # Clear creation output
+
+        ds.sel(word="hello")
+        captured = capsys.readouterr()
+        assert "DEBUG sel:" in captured.out
+
+    def test_sel_continuous_scalar(self, ds_multi):
+        """Selecting scalar on continuous dimension works with method='nearest'."""
+        result = ds_multi.sel(time=50.0, method="nearest")
+        _ = result * 1  # Force evaluation
+        assert result.sizes["time"] == 1
