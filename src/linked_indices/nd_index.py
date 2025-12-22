@@ -516,3 +516,268 @@ class NDIndex(Index):
     def should_add_coord_to_array(self, name, var, dims) -> bool:
         """Whether to add a coordinate to a DataArray."""
         return True
+
+    def __repr__(self) -> str:
+        """Return a string representation of the NDIndex."""
+        lines = [f"<{self.__class__.__name__}>"]
+        lines.append(f"  slice_method: {self._slice_method!r}")
+
+        if self._nd_coords:
+            lines.append("  Coordinates:")
+            for name, ndc in self._nd_coords.items():
+                shape_str = " × ".join(str(s) for s in ndc.values.shape)
+                dims_str = ", ".join(ndc.dims)
+
+                # Value range
+                val_min = ndc.values.min()
+                val_max = ndc.values.max()
+
+                lines.append(f"    {name}:")
+                lines.append(f"      dims: ({dims_str})")
+                lines.append(f"      shape: ({shape_str})")
+                lines.append(f"      range: [{val_min:.4g}, {val_max:.4g}]")
+
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        """Return an HTML representation of the NDIndex."""
+        import uuid
+
+        # Generate unique ID for this repr instance
+        repr_id = f"nd-{uuid.uuid4().hex[:8]}"
+
+        # CSS styles with dark/light mode support
+        style = """
+        <style>
+            .nd-repr {
+                font-family: monospace;
+                font-size: 13px;
+                line-height: 1.4;
+            }
+            .nd-repr table {
+                border-collapse: collapse;
+                margin: 8px 0;
+            }
+            .nd-repr th, .nd-repr td {
+                padding: 4px 12px;
+                text-align: left;
+            }
+
+            /* Light mode (default) */
+            .nd-repr table {
+                border: 1px solid #ccc;
+            }
+            .nd-repr th, .nd-repr td {
+                border: 1px solid #ddd;
+            }
+            .nd-repr th {
+                background-color: #f5f5f5;
+                font-weight: bold;
+            }
+            .nd-repr .section-header {
+                background-color: #e8e8e8;
+                font-weight: bold;
+                padding: 6px 12px;
+            }
+            .nd-repr .coord-name { color: #0066cc; font-weight: bold; }
+            .nd-repr .dims { color: #666; }
+            .nd-repr .shape { color: #8b008b; }
+            .nd-repr .range { color: #228b22; }
+            .nd-repr .method { color: #8b4513; font-style: italic; }
+            .nd-repr details { margin: 4px 0; }
+            .nd-repr summary {
+                cursor: pointer;
+                padding: 4px 8px;
+                background-color: #f0f0f0;
+                border-radius: 4px;
+            }
+            .nd-repr summary:hover { background-color: #e0e0e0; }
+            .nd-repr code {
+                background-color: #f0f0f0;
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            .nd-repr .value-preview {
+                max-height: 100px;
+                overflow-y: auto;
+                padding: 4px 8px;
+                margin: 4px 0;
+                background-color: #fafafa;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+
+            /* Dark mode */
+            @media (prefers-color-scheme: dark) {
+                .nd-repr table {
+                    border-color: #444;
+                }
+                .nd-repr th, .nd-repr td {
+                    border-color: #444;
+                }
+                .nd-repr th {
+                    background-color: #2d2d2d;
+                }
+                .nd-repr .section-header {
+                    background-color: #383838;
+                }
+                .nd-repr .coord-name { color: #6db3f2; }
+                .nd-repr .dims { color: #aaa; }
+                .nd-repr .shape { color: #c586c0; }
+                .nd-repr .range { color: #73c991; }
+                .nd-repr .method { color: #d4a574; }
+                .nd-repr summary {
+                    background-color: #383838;
+                }
+                .nd-repr summary:hover { background-color: #444; }
+                .nd-repr code {
+                    background-color: #383838;
+                }
+                .nd-repr .value-preview {
+                    background-color: #2d2d2d;
+                }
+            }
+
+            /* JupyterLab dark theme detection */
+            [data-jp-theme-light="false"] .nd-repr table {
+                border-color: #444;
+            }
+            [data-jp-theme-light="false"] .nd-repr th,
+            [data-jp-theme-light="false"] .nd-repr td {
+                border-color: #444;
+            }
+            [data-jp-theme-light="false"] .nd-repr th {
+                background-color: #2d2d2d;
+            }
+            [data-jp-theme-light="false"] .nd-repr .section-header {
+                background-color: #383838;
+            }
+            [data-jp-theme-light="false"] .nd-repr .coord-name { color: #6db3f2; }
+            [data-jp-theme-light="false"] .nd-repr .dims { color: #aaa; }
+            [data-jp-theme-light="false"] .nd-repr .shape { color: #c586c0; }
+            [data-jp-theme-light="false"] .nd-repr .range { color: #73c991; }
+            [data-jp-theme-light="false"] .nd-repr .method { color: #d4a574; }
+            [data-jp-theme-light="false"] .nd-repr summary {
+                background-color: #383838;
+            }
+            [data-jp-theme-light="false"] .nd-repr summary:hover {
+                background-color: #444;
+            }
+            [data-jp-theme-light="false"] .nd-repr code {
+                background-color: #383838;
+            }
+            [data-jp-theme-light="false"] .nd-repr .value-preview {
+                background-color: #2d2d2d;
+            }
+        </style>
+        """
+
+        html_parts = [style, f'<div class="nd-repr" id="{repr_id}">']
+        html_parts.append(
+            f"<strong>&lt;{self.__class__.__name__}&gt;</strong> "
+            f'<span class="method">(slice_method: {self._slice_method!r})</span>'
+        )
+
+        if self._nd_coords:
+            html_parts.append("<table>")
+            html_parts.append(
+                '<tr><th colspan="4" class="section-header">N-D Coordinates</th></tr>'
+            )
+            html_parts.append(
+                "<tr><th>Coordinate</th><th>Dimensions</th><th>Shape</th><th>Range</th></tr>"
+            )
+
+            for name, ndc in self._nd_coords.items():
+                shape_str = " × ".join(str(s) for s in ndc.values.shape)
+                dims_str = ", ".join(ndc.dims)
+                val_min = ndc.values.min()
+                val_max = ndc.values.max()
+
+                html_parts.append(
+                    f"<tr>"
+                    f'<td><span class="coord-name">{name}</span></td>'
+                    f'<td><span class="dims">({dims_str})</span></td>'
+                    f'<td><span class="shape">({shape_str})</span></td>'
+                    f'<td><span class="range">[{val_min:.4g}, {val_max:.4g}]</span></td>'
+                    f"</tr>"
+                )
+
+            html_parts.append("</table>")
+
+            # Selection examples
+            html_parts.append("<details>")
+            html_parts.append("<summary>Selection examples</summary>")
+            html_parts.append('<div style="padding: 8px;">')
+
+            for name, ndc in self._nd_coords.items():
+                val_min = ndc.values.min()
+                val_max = ndc.values.max()
+                mid_val = (val_min + val_max) / 2
+
+                # Scalar selection
+                html_parts.append(
+                    "<div><strong>Scalar selection (nearest):</strong></div>"
+                )
+                html_parts.append(
+                    f'<div><code>ds.sel({name}={mid_val:.4g}, method="nearest")</code></div>'
+                )
+
+                # Slice selection
+                quarter = (val_max - val_min) / 4
+                html_parts.append(
+                    "<div style='margin-top: 4px;'><strong>Slice selection:</strong></div>"
+                )
+                html_parts.append(
+                    f"<div><code>ds.sel({name}=slice({val_min + quarter:.4g}, {val_max - quarter:.4g}))</code></div>"
+                )
+
+                # Slice with step
+                html_parts.append(
+                    "<div style='margin-top: 4px;'><strong>Slice with step:</strong></div>"
+                )
+                html_parts.append(
+                    f"<div><code>ds.sel({name}=slice({val_min:.4g}, {val_max:.4g}, 2))</code></div>"
+                )
+
+            html_parts.append("</div></details>")
+
+            # Value preview
+            html_parts.append("<details>")
+            html_parts.append("<summary>Value preview</summary>")
+
+            for name, ndc in self._nd_coords.items():
+                html_parts.append(
+                    f'<div style="margin: 8px 0;"><strong>{name}</strong>:'
+                )
+                html_parts.append('<div class="value-preview">')
+
+                # Show a preview of values (first few per dimension)
+                arr = ndc.values
+                if arr.ndim == 2:
+                    rows, cols = arr.shape
+                    max_rows = min(3, rows)
+                    max_cols = min(5, cols)
+                    for i in range(max_rows):
+                        row_vals = ", ".join(
+                            f"{arr[i, j]:.4g}" for j in range(max_cols)
+                        )
+                        suffix = ", ..." if cols > max_cols else ""
+                        html_parts.append(f"[{i}]: [{row_vals}{suffix}]<br>")
+                    if rows > max_rows:
+                        html_parts.append("...<br>")
+                elif arr.ndim == 3:
+                    d0, d1, d2 = arr.shape
+                    for i in range(min(2, d0)):
+                        html_parts.append(f"[{i}, :, :]: shape ({d1}, {d2})<br>")
+                    if d0 > 2:
+                        html_parts.append("...<br>")
+                else:
+                    html_parts.append(f"shape: {arr.shape}<br>")
+
+                html_parts.append("</div></div>")
+
+            html_parts.append("</details>")
+
+        html_parts.append("</div>")
+        return "".join(html_parts)

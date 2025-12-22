@@ -20,6 +20,8 @@ project:
       title: ND Coordinates
     - file: ndindex_performance.ipynb
       title: NDIndex Performance
+    - file: index_repr_demo.ipynb
+      title: Index Repr
     - title: Gallery
       children:
         - file: ndindex_slicing_gallery.ipynb

@@ -631,6 +631,304 @@ class DimensionInterval(Index):
         # and dims of the DataArray (not the coord). We always return True for now.
         return True
 
+    def __repr__(self) -> str:
+        """Return a string representation of the DimensionInterval index."""
+        lines = [f"<{self.__class__.__name__}>"]
+
+        # Continuous dimension info
+        cont_idx = self._continuous_index.index
+        cont_size = len(cont_idx)
+        cont_min, cont_max = cont_idx.min(), cont_idx.max()
+        lines.append(f"  Continuous: {self._continuous_name}")
+        lines.append(f"    size: {cont_size}, range: [{cont_min:.4g}, {cont_max:.4g}]")
+
+        # Interval dimensions
+        if self._interval_dims:
+            lines.append("  Interval dimensions:")
+            for dim_name, info in self._interval_dims.items():
+                interval_idx = info.interval_index.index
+                int_size = len(interval_idx)
+                int_min = interval_idx[0].left
+                int_max = interval_idx[-1].right
+
+                # Determine source (onset/duration or explicit intervals)
+                source = "(from onset/duration)" if info.from_onset_duration else ""
+
+                lines.append(f"    {dim_name}: {source}".rstrip())
+                if not info.from_onset_duration:
+                    lines.append(f"      coord: {info.coord_name}")
+                lines.append(
+                    f"      size: {int_size}, "
+                    f"range: [{int_min:.4g}, {int_max:.4g}), "
+                    f"closed: {interval_idx.closed!r}"
+                )
+
+                # Label coordinates
+                if info.label_indexes:
+                    label_names = list(info.label_indexes.keys())
+                    lines.append(f"      labels: {label_names}")
+
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        """Return an HTML representation of the DimensionInterval index."""
+        import uuid
+
+        # Generate unique ID for this repr instance (for interactive elements)
+        repr_id = f"di-{uuid.uuid4().hex[:8]}"
+
+        # CSS styles with dark/light mode support
+        style = """
+        <style>
+            .di-repr {
+                font-family: monospace;
+                font-size: 13px;
+                line-height: 1.4;
+            }
+            .di-repr table {
+                border-collapse: collapse;
+                margin: 8px 0;
+            }
+            .di-repr th, .di-repr td {
+                padding: 4px 12px;
+                text-align: left;
+            }
+
+            /* Light mode (default) */
+            .di-repr table {
+                border: 1px solid #ccc;
+            }
+            .di-repr th, .di-repr td {
+                border: 1px solid #ddd;
+            }
+            .di-repr th {
+                background-color: #f5f5f5;
+                font-weight: bold;
+            }
+            .di-repr .section-header {
+                background-color: #e8e8e8;
+                font-weight: bold;
+                padding: 6px 12px;
+            }
+            .di-repr .dim-name { color: #0066cc; font-weight: bold; }
+            .di-repr .coord-name { color: #555; }
+            .di-repr .range { color: #228b22; }
+            .di-repr .label-list { color: #8b4513; font-style: italic; }
+            .di-repr .interval-item { color: #666; }
+            .di-repr details { margin: 4px 0; }
+            .di-repr summary {
+                cursor: pointer;
+                padding: 4px 8px;
+                background-color: #f0f0f0;
+                border-radius: 4px;
+            }
+            .di-repr summary:hover { background-color: #e0e0e0; }
+            .di-repr .interval-list {
+                max-height: 150px;
+                overflow-y: auto;
+                padding: 4px 8px;
+                margin: 4px 0;
+                background-color: #fafafa;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            .di-repr code {
+                background-color: #f0f0f0;
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+
+            /* Dark mode */
+            @media (prefers-color-scheme: dark) {
+                .di-repr table {
+                    border-color: #444;
+                }
+                .di-repr th, .di-repr td {
+                    border-color: #444;
+                }
+                .di-repr th {
+                    background-color: #2d2d2d;
+                }
+                .di-repr .section-header {
+                    background-color: #383838;
+                }
+                .di-repr .dim-name { color: #6db3f2; }
+                .di-repr .coord-name { color: #aaa; }
+                .di-repr .range { color: #73c991; }
+                .di-repr .label-list { color: #d4a574; }
+                .di-repr .interval-item { color: #aaa; }
+                .di-repr summary {
+                    background-color: #383838;
+                }
+                .di-repr summary:hover { background-color: #444; }
+                .di-repr .interval-list {
+                    background-color: #2d2d2d;
+                }
+                .di-repr code {
+                    background-color: #383838;
+                }
+            }
+
+            /* JupyterLab dark theme detection */
+            [data-jp-theme-light="false"] .di-repr table {
+                border-color: #444;
+            }
+            [data-jp-theme-light="false"] .di-repr th,
+            [data-jp-theme-light="false"] .di-repr td {
+                border-color: #444;
+            }
+            [data-jp-theme-light="false"] .di-repr th {
+                background-color: #2d2d2d;
+            }
+            [data-jp-theme-light="false"] .di-repr .section-header {
+                background-color: #383838;
+            }
+            [data-jp-theme-light="false"] .di-repr .dim-name { color: #6db3f2; }
+            [data-jp-theme-light="false"] .di-repr .coord-name { color: #aaa; }
+            [data-jp-theme-light="false"] .di-repr .range { color: #73c991; }
+            [data-jp-theme-light="false"] .di-repr .label-list { color: #d4a574; }
+            [data-jp-theme-light="false"] .di-repr .interval-item { color: #aaa; }
+            [data-jp-theme-light="false"] .di-repr summary {
+                background-color: #383838;
+            }
+            [data-jp-theme-light="false"] .di-repr summary:hover {
+                background-color: #444;
+            }
+            [data-jp-theme-light="false"] .di-repr .interval-list {
+                background-color: #2d2d2d;
+            }
+            [data-jp-theme-light="false"] .di-repr code {
+                background-color: #383838;
+            }
+        </style>
+        """
+
+        html_parts = [style, f'<div class="di-repr" id="{repr_id}">']
+        html_parts.append(f"<strong>&lt;{self.__class__.__name__}&gt;</strong>")
+
+        # Continuous dimension table
+        cont_idx = self._continuous_index.index
+        cont_size = len(cont_idx)
+        cont_min, cont_max = cont_idx.min(), cont_idx.max()
+
+        html_parts.append("<table>")
+        html_parts.append(
+            '<tr><th colspan="2" class="section-header">Continuous Dimension</th></tr>'
+        )
+        html_parts.append(
+            f'<tr><td><span class="dim-name">{self._continuous_name}</span></td>'
+            f"<td>size: {cont_size}, "
+            f'<span class="range">range: [{cont_min:.4g}, {cont_max:.4g}]</span></td></tr>'
+        )
+        html_parts.append("</table>")
+
+        # Interval dimensions table
+        if self._interval_dims:
+            html_parts.append("<table>")
+            html_parts.append(
+                '<tr><th colspan="4" class="section-header">Interval Dimensions</th></tr>'
+            )
+            html_parts.append(
+                "<tr><th>Dimension</th><th>Coord</th><th>Size / Range</th><th>Labels</th></tr>"
+            )
+
+            for dim_name, info in self._interval_dims.items():
+                interval_idx = info.interval_index.index
+                int_size = len(interval_idx)
+                int_min = interval_idx[0].left
+                int_max = interval_idx[-1].right
+
+                coord_display = (
+                    "<em>(onset/duration)</em>"
+                    if info.from_onset_duration
+                    else f'<span class="coord-name">{info.coord_name}</span>'
+                )
+
+                label_names = (
+                    list(info.label_indexes.keys()) if info.label_indexes else []
+                )
+                labels_display = (
+                    f'<span class="label-list">{", ".join(label_names)}</span>'
+                    if label_names
+                    else "—"
+                )
+
+                html_parts.append(
+                    f"<tr>"
+                    f'<td><span class="dim-name">{dim_name}</span></td>'
+                    f"<td>{coord_display}</td>"
+                    f'<td>{int_size} / <span class="range">[{int_min:.4g}, {int_max:.4g})</span> '
+                    f"({interval_idx.closed})</td>"
+                    f"<td>{labels_display}</td>"
+                    f"</tr>"
+                )
+
+            html_parts.append("</table>")
+
+            # Expandable interval details
+            html_parts.append("<details>")
+            html_parts.append("<summary>Show interval details</summary>")
+
+            for dim_name, info in self._interval_dims.items():
+                interval_idx = info.interval_index.index
+                html_parts.append(
+                    f'<div style="margin: 8px 0;"><strong>{dim_name}</strong> intervals:'
+                )
+
+                # Show intervals with labels if available
+                html_parts.append('<div class="interval-list">')
+                for i, interval in enumerate(interval_idx):
+                    # Get label values if available
+                    label_info = ""
+                    if info.label_indexes:
+                        label_vals = []
+                        for label_name, label_idx in info.label_indexes.items():
+                            val = label_idx.index[i]
+                            label_vals.append(f"{label_name}={val!r}")
+                        label_info = f" ({', '.join(label_vals)})"
+
+                    html_parts.append(
+                        f'<span class="interval-item">[{i}] {interval}{label_info}</span><br>'
+                    )
+                html_parts.append("</div></div>")
+
+            html_parts.append("</details>")
+
+            # Selection examples
+            html_parts.append("<details>")
+            html_parts.append("<summary>Selection examples</summary>")
+            html_parts.append('<div style="padding: 8px;">')
+
+            # Example for continuous dimension
+            mid_val = (cont_min + cont_max) / 2
+            html_parts.append(
+                f"<div><code>ds.sel({self._continuous_name}=slice({cont_min:.4g}, {mid_val:.4g}))</code></div>"
+            )
+
+            # Examples for interval dimensions
+            for dim_name, info in self._interval_dims.items():
+                if info.label_indexes:
+                    # Use first label coordinate
+                    first_label_name = next(iter(info.label_indexes.keys()))
+                    first_label_idx = info.label_indexes[first_label_name]
+                    first_val = first_label_idx.index[0]
+                    html_parts.append(
+                        f"<div><code>ds.sel({first_label_name}={first_val!r})</code></div>"
+                    )
+
+                if not info.from_onset_duration:
+                    interval_idx = info.interval_index.index
+                    mid_point = (interval_idx[0].left + interval_idx[0].right) / 2
+                    html_parts.append(
+                        f"<div><code>ds.sel({info.coord_name}={mid_point:.4g})</code></div>"
+                    )
+
+            html_parts.append("</div></details>")
+
+        html_parts.append("</div>")
+        return "".join(html_parts)
+
     def sel(self, labels, method=None, tolerance=None):
         """Label-based indexing on the dataset.
 
