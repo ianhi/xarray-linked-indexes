@@ -33,12 +33,11 @@ dev = [
   "pytest-cov>=7.0.0",
   "ruff>=0.14.8",
   "scipy>=1.16.3",
+  "ty>=0.0.5",
   "xarray-fancy-repr>=0.0.2",
   "zarr>=3.1.5",
 ]
-docs = [
-    "jupyter-book>=2.1.0",
-]
+docs = ["jupyter-book>=2.1.0"]
 vim = ["jupyterlab-vim>=4.1.4"]
 
 [tool.pytest.ini_options]

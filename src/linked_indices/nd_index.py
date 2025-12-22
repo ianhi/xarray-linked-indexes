@@ -33,7 +33,10 @@ from xarray import Index
 from xarray.core.indexing import IndexSelResult
 from xarray.core.variable import Variable
 
-__all__ = ["NDIndex"]
+__all__ = ["NDIndex", "nd_sel"]
+
+# Valid returns modes for selection
+RETURNS_MODES = ("slice", "mask", "metadata")
 
 # Valid slice methods
 SLICE_METHODS = ("bounding_box", "trim_outer")
@@ -56,21 +59,16 @@ class NDCoord:
     _flat_values: np.ndarray | None = None
     _is_sorted: bool | None = None
 
-    def __post_init__(self):
-        """Check if values are sorted and cache flat array."""
-        self._flat_values = self.values.ravel()
-        self._is_sorted = _is_sorted(self.values)
-
     @property
     def is_sorted(self) -> bool:
-        """Whether the flattened values are sorted (enables O(log n) lookups)."""
+        """Lazily check if values are sorted (computed on first access)."""
         if self._is_sorted is None:
             self._is_sorted = _is_sorted(self.values)
         return self._is_sorted
 
     @property
     def flat_values(self) -> np.ndarray:
-        """Flattened coordinate values."""
+        """Lazily flatten values (computed on first access)."""
         if self._flat_values is None:
             self._flat_values = self.values.ravel()
         return self._flat_values
@@ -112,7 +110,9 @@ class NDIndex(Index):
     >>> from linked_indices.example_data import trial_based_dataset
     >>> ds = trial_based_dataset(mode="stacked")
     >>> ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
-    >>> ds_indexed.sel(abs_time=7.5)  # Finds trial=1, rel_time=2.5
+    >>> result = ds_indexed.sel(abs_time=7.5)  # Finds trial=1, rel_time=2.5
+    >>> float(result.abs_time)
+    7.5
     """
 
     _nd_coords: dict[str, NDCoord]
@@ -168,7 +168,7 @@ class NDIndex(Index):
 
             nd_coords[name] = NDCoord(
                 name=name,
-                dims=var.dims,
+                dims=tuple(str(d) for d in var.dims),
                 values=var.values,
             )
 
@@ -184,11 +184,13 @@ class NDIndex(Index):
 
         return cls(nd_coords=nd_coords, slice_method=slice_method, debug=debug)
 
-    def create_variables(self, variables):
+    def create_variables(
+        self, variables: Mapping[Any, Variable] | None = None
+    ) -> dict[Any, Variable]:
         """Create index variables for the dataset."""
         from xarray.core.variable import Variable as XrVariable
 
-        idx_variables = {}
+        idx_variables: dict[Any, Variable] = {}
         for name, ndc in self._nd_coords.items():
             idx_variables[name] = XrVariable(dims=ndc.dims, data=ndc.values)
         return idx_variables
@@ -236,22 +238,11 @@ class NDIndex(Index):
         self, flat_values: np.ndarray, value: float, method: str | None, coord_name: str
     ) -> int:
         """O(log n) binary search for sorted arrays."""
-        idx = np.searchsorted(flat_values, value)
+        idx = int(np.searchsorted(flat_values, value))
         n = len(flat_values)
 
         if method == "nearest":
-            # Find nearest by checking left and right neighbors
-            if idx == 0:
-                return 0
-            elif idx == n:
-                return n - 1
-            else:
-                left_val = flat_values[idx - 1]
-                right_val = flat_values[idx]
-                if abs(value - left_val) <= abs(value - right_val):
-                    return idx - 1
-                else:
-                    return idx
+            return self._find_nearest_index(flat_values, value, idx)
         else:
             # Exact match required
             if idx < n and flat_values[idx] == value:
@@ -260,6 +251,47 @@ class NDIndex(Index):
                 f"Value {value!r} not found in coordinate {coord_name!r}. "
                 f"Use method='nearest' for approximate matching."
             )
+
+    def _find_nearest_index(
+        self, flat_values: np.ndarray, value: float, searchsorted_idx: int | None = None
+    ) -> int:
+        """Find the index of the nearest value using O(log n) binary search.
+
+        Parameters
+        ----------
+        flat_values : np.ndarray
+            Sorted 1D array to search
+        value : float
+            Target value to find nearest match for
+        searchsorted_idx : int, optional
+            Pre-computed searchsorted result to avoid redundant computation
+
+        Returns
+        -------
+        int
+            Index of the nearest value
+        """
+        n = len(flat_values)
+        if n == 0:
+            raise ValueError("Cannot find nearest in empty array")
+
+        idx = (
+            searchsorted_idx
+            if searchsorted_idx is not None
+            else int(np.searchsorted(flat_values, value))
+        )
+
+        if idx == 0:
+            return 0
+        elif idx == n:
+            return n - 1
+        else:
+            left_val = flat_values[idx - 1]
+            right_val = flat_values[idx]
+            if abs(value - left_val) <= abs(value - right_val):
+                return int(idx - 1)
+            else:
+                return int(idx)
 
     def _linear_search(
         self, values: np.ndarray, value: float, method: str | None, coord_name: str
@@ -283,12 +315,13 @@ class NDIndex(Index):
         stop: float,
         step: int | None = None,
         slice_method: str | None = None,
+        method: str | None = None,
     ) -> dict[str, slice]:
         """
         Find slices in all dimensions for a value range.
 
-        Uses O(log n + k) binary search when coordinate values are sorted
-        (where k is the number of matching cells), otherwise O(n) linear scan.
+        Uses O(log n) binary search when coordinate values are sorted,
+        otherwise O(n) linear scan.
 
         Parameters
         ----------
@@ -303,6 +336,11 @@ class NDIndex(Index):
         slice_method : str or None
             Override the default slice method. If None, uses self._slice_method.
             Options: "bounding_box", "trim_outer"
+        method : str or None
+            Selection method for boundaries:
+            - None (default): start/stop are treated as exact boundaries
+            - "nearest": find nearest values to start/stop (useful when exact
+              values don't exist in the coordinate)
 
         Returns
         -------
@@ -310,29 +348,47 @@ class NDIndex(Index):
         """
         ndc = self._nd_coords[coord_name]
         values = ndc.values
-        method = slice_method or self._slice_method
+        bbox_method = slice_method or self._slice_method
 
         if ndc.is_sorted:
-            # O(log n + k) path: use binary search to find range bounds
+            # O(log n) path: use binary search to find range bounds
             flat_values = ndc.flat_values
-            left_idx = np.searchsorted(flat_values, start, side="left")
-            right_idx = np.searchsorted(flat_values, stop, side="right")
+
+            if method == "nearest":
+                # Find nearest values to start and stop
+                left_idx = self._find_nearest_index(flat_values, start)
+                right_idx = self._find_nearest_index(flat_values, stop)
+                # Ensure right >= left (swap if needed due to nearest finding)
+                if right_idx < left_idx:
+                    left_idx, right_idx = right_idx, left_idx
+                # right_idx is inclusive, so add 1 for the slice
+                right_idx += 1
+            else:
+                # Exact boundaries
+                left_idx = np.searchsorted(flat_values, start, side="left")
+                right_idx = np.searchsorted(flat_values, stop, side="right")
 
             if left_idx >= right_idx:
                 # No values in range
                 return {dim: slice(0, 0) for dim in ndc.dims}
 
-            # Get flat indices of matching cells
-            flat_indices = np.arange(left_idx, right_idx)
+            # Compute bounding box directly from first and last flat indices
+            # This is O(1) instead of O(k) where k is the number of matching cells
+            first_multi = np.unravel_index(left_idx, values.shape)
+            last_multi = np.unravel_index(right_idx - 1, values.shape)
 
-            # Convert to multi-dimensional indices
-            multi_indices = np.unravel_index(flat_indices, values.shape)
-
-            # Compute bounding box from multi-dim indices
             result = {}
             for i, dim in enumerate(ndc.dims):
-                dim_indices = multi_indices[i]
-                result[dim] = slice(int(dim_indices.min()), int(dim_indices.max()) + 1)
+                if i == 0:
+                    # First dimension: range is [first[0], last[0] + 1]
+                    result[dim] = slice(int(first_multi[0]), int(last_multi[0]) + 1)
+                else:
+                    # Later dimensions: if all preceding dims are same, use actual range
+                    # Otherwise the range spans the full dimension
+                    if first_multi[:i] == last_multi[:i]:
+                        result[dim] = slice(int(first_multi[i]), int(last_multi[i]) + 1)
+                    else:
+                        result[dim] = slice(0, values.shape[i])
 
             # Apply step to innermost dimension
             if step is not None and step != 1:
@@ -344,6 +400,35 @@ class NDIndex(Index):
             return result
 
         # O(n) path: scan all values
+        if method == "nearest":
+            # Find nearest values to start and stop using linear scan
+            flat_values = values.ravel()
+            left_idx = int(np.argmin(np.abs(flat_values - start)))
+            right_idx = int(np.argmin(np.abs(flat_values - stop)))
+            # Ensure right >= left
+            if right_idx < left_idx:
+                left_idx, right_idx = right_idx, left_idx
+
+            # Convert flat indices to multi-dimensional and compute bounding box
+            first_multi = np.unravel_index(left_idx, values.shape)
+            last_multi = np.unravel_index(right_idx, values.shape)
+
+            result = {}
+            for i, dim in enumerate(ndc.dims):
+                dim_start = min(first_multi[i], last_multi[i])
+                dim_stop = max(first_multi[i], last_multi[i]) + 1
+                result[dim] = slice(int(dim_start), int(dim_stop))
+
+            # Apply step to innermost dimension
+            if step is not None and step != 1:
+                inner_dim = ndc.dims[-1]
+                if inner_dim in result:
+                    s = result[inner_dim]
+                    result[inner_dim] = slice(s.start, s.stop, step)
+
+            return result
+
+        # Standard range selection
         in_range = (values >= start) & (values <= stop)
 
         if not np.any(in_range):
@@ -352,7 +437,7 @@ class NDIndex(Index):
 
         result = {}
 
-        if method == "bounding_box":
+        if bbox_method == "bounding_box":
             # For each dimension, find the bounding extent of in-range cells
             for i, dim in enumerate(ndc.dims):
                 # Project onto this dimension: any in-range value along other dims
@@ -370,7 +455,7 @@ class NDIndex(Index):
                     # Defensive: if any cell is in_range, all dims have indices
                     result[dim] = slice(0, 0)
 
-        elif method == "trim_outer":
+        elif bbox_method == "trim_outer":
             # For outer dims: only include indices that have at least one match
             # For inner dim: use bounding box extent
             inner_dim = ndc.dims[-1]  # Last dim is the "inner" dimension
@@ -416,9 +501,12 @@ class NDIndex(Index):
         - Default (method=None): requires exact match, raises KeyError if not found
         - method='nearest': finds cell with closest value
 
-        For slice selection: finds all cells in range, returns slices
-        covering the extent in each dimension. The slice behavior depends on
-        the slice_method configured for this index:
+        For slice selection:
+        - Default (method=None): finds all cells in range [start, stop]
+        - method='nearest': finds nearest values to start/stop boundaries
+          (useful when exact boundary values don't exist in the coordinate)
+
+        The slice behavior depends on the slice_method configured for this index:
         - "bounding_box": smallest rectangle containing all matches
         - "trim_outer": only outer indices with at least one match
 
@@ -441,7 +529,9 @@ class NDIndex(Index):
                 start = value.start if value.start is not None else ndc.values.min()
                 stop = value.stop if value.stop is not None else ndc.values.max()
                 step = value.step  # May be None
-                slices = self._find_slices_for_range(name, start, stop, step=step)
+                slices = self._find_slices_for_range(
+                    name, start, stop, step=step, method=method
+                )
                 dim_indexers.update(slices)
             else:
                 # Scalar selection - exact or nearest based on method
@@ -456,6 +546,120 @@ class NDIndex(Index):
             print(f"DEBUG sel result: dim_indexers={dim_indexers}")
 
         return IndexSelResult(dim_indexers)
+
+    def sel_masked(
+        self,
+        obj,
+        labels: dict[str, Any],
+        method: str | None = None,
+        returns: str = "mask",
+    ):
+        """
+        Select with non-rectangular masking support.
+
+        Unlike sel(), this method can return masked results where values
+        outside the selection range are set to NaN (returns='mask') or
+        a boolean coordinate is added (returns='metadata').
+
+        Parameters
+        ----------
+        obj : xr.Dataset or xr.DataArray
+            The object to select from
+        labels : dict
+            Mapping of coordinate name to selection value (scalar or slice)
+        method : str or None
+            'nearest' to snap to nearest values, None for exact boundaries
+        returns : str
+            - 'slice': Standard rectangular selection (same as sel())
+            - 'mask': Apply NaN mask outside selection range
+            - 'metadata': Add boolean coordinate indicating membership
+
+        Returns
+        -------
+        xr.Dataset or xr.DataArray
+            Selected data with masking applied if requested
+
+        Examples
+        --------
+        >>> from linked_indices import NDIndex
+        >>> from linked_indices.example_data import trial_based_dataset
+        >>> ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=1)
+        >>> ds = ds.set_xindex(['abs_time'], NDIndex)
+        >>> index = ds.xindexes['abs_time']
+
+        Mask values outside [1, 8] with NaN:
+
+        >>> result = index.sel_masked(ds, {'abs_time': slice(1, 8)}, returns='mask')
+        >>> import numpy as np
+        >>> bool(np.any(np.isnan(result['data'].values)))
+        True
+
+        Add boolean coordinate showing which cells are in range:
+
+        >>> result = index.sel_masked(ds, {'abs_time': slice(1, 8)}, returns='metadata')
+        >>> 'in_abs_time_range' in result.coords
+        True
+        """
+        if returns not in RETURNS_MODES:
+            raise ValueError(
+                f"Invalid returns={returns!r}. Must be one of {RETURNS_MODES}"
+            )
+
+        # First, get the bounding box selection (always a view when possible)
+        result = obj.sel(labels, method=method)
+
+        if returns == "slice":
+            return result
+
+        # Compute mask for each coordinate in labels
+        combined_mask = None
+        for name, value in labels.items():
+            if name not in self._nd_coords:  # pragma: no cover
+                # Defensive: skip labels not managed by this index
+                continue
+
+            if isinstance(value, slice):
+                ndc = self._nd_coords[name]
+                start = value.start if value.start is not None else ndc.values.min()
+                stop = value.stop if value.stop is not None else ndc.values.max()
+
+                # Compute mask on the RESULT's coordinate values (after slicing)
+                result_values = result[name].values
+                if method == "nearest":
+                    # Snap boundaries using original coordinate
+                    if ndc.is_sorted:
+                        flat_values = ndc.flat_values
+                        start_idx = self._find_nearest_index(flat_values, start)
+                        stop_idx = self._find_nearest_index(flat_values, stop)
+                        start = flat_values[min(start_idx, stop_idx)]
+                        stop = flat_values[max(start_idx, stop_idx)]
+                    else:
+                        flat_orig = ndc.values.ravel()
+                        start_idx = int(np.argmin(np.abs(flat_orig - start)))
+                        stop_idx = int(np.argmin(np.abs(flat_orig - stop)))
+                        start = flat_orig[min(start_idx, stop_idx)]
+                        stop = flat_orig[max(start_idx, stop_idx)]
+
+                mask = (result_values >= start) & (result_values <= stop)
+
+                if combined_mask is None:
+                    combined_mask = mask
+                else:
+                    combined_mask = combined_mask & mask
+
+        if combined_mask is None:
+            # No slice selections on our coordinates
+            return result
+
+        if returns == "mask":
+            return result.where(combined_mask)
+        elif returns == "metadata":
+            # Find the first coord name we're selecting on for naming
+            coord_names = [n for n in labels if n in self._nd_coords]
+            mask_name = f"in_{coord_names[0]}_range" if coord_names else "in_range"
+            return result.assign_coords(
+                {mask_name: (result[coord_names[0]].dims, combined_mask)}
+            )
 
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | Variable]
@@ -516,3 +720,92 @@ class NDIndex(Index):
     def should_add_coord_to_array(self, name, var, dims) -> bool:
         """Whether to add a coordinate to a DataArray."""
         return True
+
+
+def nd_sel(
+    obj,
+    labels: dict[str, Any] | None = None,
+    method: str | None = None,
+    returns: str = "slice",
+    **label_kwargs,
+):
+    """
+    Select from an xarray object with non-rectangular masking support.
+
+    This is a convenience function that wraps NDIndex.sel_masked(). It finds
+    the NDIndex managing the specified coordinates and applies the selection.
+
+    Parameters
+    ----------
+    obj : xr.Dataset or xr.DataArray
+        The object to select from
+    labels : dict, optional
+        Mapping of coordinate name to selection value (scalar or slice)
+    method : str or None
+        'nearest' to snap to nearest values, None for exact boundaries
+    returns : str
+        - 'slice': Standard rectangular selection (same as ds.sel())
+        - 'mask': Apply NaN mask outside selection range
+        - 'metadata': Add boolean coordinate indicating membership
+    **label_kwargs
+        Alternative way to specify labels as keyword arguments
+
+    Returns
+    -------
+    xr.Dataset or xr.DataArray
+        Selected data with masking applied if requested
+
+    Examples
+    --------
+    >>> from linked_indices import nd_sel, NDIndex
+    >>> from linked_indices.example_data import trial_based_dataset
+    >>> ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=1)
+    >>> ds = ds.set_xindex(['abs_time'], NDIndex)
+
+    Standard slice selection (equivalent to ds.sel()):
+
+    >>> result = nd_sel(ds, abs_time=slice(1, 8), returns='slice')
+    >>> result.sizes['trial']
+    2
+
+    Mask values outside range with NaN:
+
+    >>> import numpy as np
+    >>> result = nd_sel(ds, abs_time=slice(1, 8), returns='mask')
+    >>> bool(np.any(np.isnan(result['data'].values)))
+    True
+
+    Add boolean coordinate showing membership:
+
+    >>> result = nd_sel(ds, abs_time=slice(1, 8), returns='metadata')
+    >>> 'in_abs_time_range' in result.coords
+    True
+    """
+    # Merge labels dict with kwargs
+    if labels is None:
+        labels = {}
+    labels = {**labels, **label_kwargs}
+
+    if not labels:
+        raise ValueError("Must provide at least one coordinate label")
+
+    # Find the NDIndex that manages these coordinates
+    nd_index = None
+    for name in labels:
+        if name in obj.xindexes:
+            idx = obj.xindexes[name]
+            if isinstance(idx, NDIndex):
+                nd_index = idx
+                break
+
+    if nd_index is None:
+        # No NDIndex found - fall back to standard sel for 'slice' mode
+        if returns == "slice":
+            return obj.sel(labels, method=method)
+        else:
+            raise ValueError(
+                f"No NDIndex found for coordinates {list(labels.keys())}. "
+                f"returns='{returns}' requires an NDIndex-managed coordinate."
+            )
+
+    return nd_index.sel_masked(obj, labels, method=method, returns=returns)

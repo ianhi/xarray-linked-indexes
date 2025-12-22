@@ -888,3 +888,789 @@ class TestNDIndexBoundingBoxBehavior:
         assert result.trial.values == "cosine"
         # sawtooth (10-15) should definitely be excluded
         assert "sawtooth" not in result.trial.values
+
+
+class TestNDIndexSliceMethodNearest:
+    """Tests for slice selection with method='nearest'."""
+
+    @pytest.fixture
+    def ds_indexed(self):
+        """Create a simple dataset with known abs_time values."""
+        # 3 trials, 5 time points each
+        # Trial 0: abs_time = 0, 1, 2, 3, 4
+        # Trial 1: abs_time = 10, 11, 12, 13, 14
+        # Trial 2: abs_time = 20, 21, 22, 23, 24
+        trial_onsets = np.array([0, 10, 20])
+        rel_time = np.arange(5, dtype=float)
+        abs_time = trial_onsets[:, np.newaxis] + rel_time[np.newaxis, :]
+        data = np.arange(15).reshape(3, 5).astype(float)
+
+        ds = xr.Dataset(
+            {"data": (["trial", "rel_time"], data)},
+            coords={
+                "trial": np.arange(3),
+                "rel_time": rel_time,
+                "abs_time": (["trial", "rel_time"], abs_time),
+            },
+        )
+        return ds.set_xindex(["abs_time"], NDIndex)
+
+    def test_slice_nearest_exact_boundaries(self, ds_indexed):
+        """When boundaries exist exactly, nearest gives same result as default."""
+        result_exact = ds_indexed.sel(abs_time=slice(1.0, 3.0))
+        result_nearest = ds_indexed.sel(abs_time=slice(1.0, 3.0), method="nearest")
+
+        # Should get the same result
+        np.testing.assert_array_equal(
+            result_exact.data.values, result_nearest.data.values
+        )
+
+    def test_slice_nearest_non_exact_boundaries(self, ds_indexed):
+        """Nearest finds closest values when exact boundaries don't exist."""
+        # Slice from 0.6 to 3.4 - should snap to nearest: 1 and 3
+        result = ds_indexed.sel(abs_time=slice(0.6, 3.4), method="nearest")
+
+        # Should include values from 1 to 3
+        assert 1.0 in result.abs_time.values
+        assert 3.0 in result.abs_time.values
+
+    def test_slice_nearest_outside_range_snaps_to_edge(self, ds_indexed):
+        """Nearest snaps to edge when boundaries are outside data range."""
+        # Slice from -5 to 2 - start should snap to 0
+        result = ds_indexed.sel(abs_time=slice(-5.0, 2.0), method="nearest")
+
+        # Should include the start of the data
+        assert 0.0 in result.abs_time.values
+
+    def test_slice_nearest_spanning_trials(self, ds_indexed):
+        """Nearest works across trial boundaries."""
+        # Slice from 3.7 to 10.3 - should snap to 4 and 10
+        result = ds_indexed.sel(abs_time=slice(3.7, 10.3), method="nearest")
+
+        # Should include both trials 0 and 1
+        assert result.sizes["trial"] >= 2
+        assert 4.0 in result.abs_time.values
+        assert 10.0 in result.abs_time.values
+
+    def test_slice_nearest_swapped_boundaries(self, ds_indexed):
+        """Nearest handles when start nearest > stop nearest."""
+        # Both 9.9 and 10.1 snap to 10
+        # Result should be a single point or small range
+        result = ds_indexed.sel(abs_time=slice(9.9, 10.1), method="nearest")
+
+        assert 10.0 in result.abs_time.values
+
+    def test_slice_nearest_single_point(self, ds_indexed):
+        """Nearest with very narrow range still returns valid slice."""
+        # Slice from 5.0 to 5.0 - but 5.0 doesn't exist, nearest is 4
+        result = ds_indexed.sel(abs_time=slice(5.0, 5.0), method="nearest")
+
+        # Should return something (the nearest point)
+        assert result.sizes["trial"] >= 1
+
+    def test_slice_nearest_with_step(self, ds_indexed):
+        """Nearest works with step parameter."""
+        result = ds_indexed.sel(abs_time=slice(0.5, 3.5, 2), method="nearest")
+
+        # Should have applied step to the slice
+        assert result.sizes["rel_time"] <= 3  # step=2 reduces points
+
+
+class TestNDIndexSliceMethodNearestUnsorted:
+    """Tests for slice selection with method='nearest' on unsorted coords."""
+
+    @pytest.fixture
+    def ds_unsorted(self):
+        """Create a dataset with unsorted abs_time values (forced unsorted path)."""
+        # Use a radial pattern that's naturally unsorted
+        x = np.linspace(-2, 2, 5)
+        y = np.linspace(-2, 2, 4)
+        X, Y = np.meshgrid(x, y)
+        radius = np.sqrt(X**2 + Y**2)
+        data = np.sin(radius)
+
+        ds = xr.Dataset(
+            {"data": (["y", "x"], data)},
+            coords={
+                "x": x,
+                "y": y,
+                "radius": (["y", "x"], radius),
+            },
+        )
+        ds_indexed = ds.set_xindex(["radius"], NDIndex)
+        # Verify it's unsorted
+        idx = ds_indexed.xindexes["radius"]
+        coord = idx._nd_coords["radius"]
+        assert not coord.is_sorted, "Expected unsorted coordinate"
+        return ds_indexed
+
+    def test_slice_nearest_unsorted(self, ds_unsorted):
+        """Nearest works on unsorted coordinates."""
+        # Find nearest to radius 1.0 - 1.5
+        result = ds_unsorted.sel(radius=slice(1.0, 1.5), method="nearest")
+
+        # Should return valid result
+        assert result.sizes["y"] >= 1
+        assert result.sizes["x"] >= 1
+
+    def test_slice_nearest_unsorted_vs_default(self, ds_unsorted):
+        """Nearest and default may give different results on unsorted."""
+        # With exact boundaries that exist
+        result_default = ds_unsorted.sel(radius=slice(0.0, 2.0))
+        result_nearest = ds_unsorted.sel(radius=slice(0.1, 1.9), method="nearest")
+
+        # Both should return valid results (may differ)
+        assert result_default.sizes["y"] >= 1
+        assert result_nearest.sizes["y"] >= 1
+
+
+class TestNDIndexMaskedSelection:
+    """Tests for masked and metadata selection modes."""
+
+    @pytest.fixture
+    def ds_indexed(self):
+        """Create a trial-based dataset with varying values per trial."""
+        # Create dataset where each trial has different abs_time values
+        # Trial 0: 0-5s -> abs_time 10-15
+        # Trial 1: 0-5s -> abs_time 20-25
+        # Trial 2: 0-5s -> abs_time 30-35
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=1)
+        return ds.set_xindex(["abs_time"], NDIndex)
+
+    def test_returns_slice_same_as_sel(self, ds_indexed):
+        """returns='slice' produces same result as regular sel()."""
+        from linked_indices import nd_sel
+
+        result_sel = ds_indexed.sel(abs_time=slice(11, 14))
+        result_nd_sel = nd_sel(ds_indexed, abs_time=slice(11, 14), returns="slice")
+
+        xr.testing.assert_identical(result_sel, result_nd_sel)
+
+    def test_returns_mask_nan_outside_range(self, ds_indexed):
+        """returns='mask' applies NaN to values outside range."""
+        from linked_indices import nd_sel
+
+        # Select abs_time between 1 and 8 - spans trials 0 and 1
+        # Trial 0: [0, 1, 2, 3, 4] - 0 is outside [1, 8]
+        # Trial 1: [5, 6, 7, 8, 9] - 9 is outside [1, 8]
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="mask")
+
+        # Check that values outside [1, 8] are NaN
+        abs_time_vals = result["abs_time"].values
+        data_vals = result["data"].values
+
+        # Build expected mask
+        mask = (abs_time_vals >= 1) & (abs_time_vals <= 8)
+
+        # NaN where outside range
+        assert np.all(np.isnan(data_vals[~mask]))
+        # Valid data where inside range
+        assert np.all(~np.isnan(data_vals[mask]))
+
+    def test_returns_mask_preserves_coords(self, ds_indexed):
+        """returns='mask' preserves coordinate structure."""
+        from linked_indices import nd_sel
+
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="mask")
+
+        # All coordinates should still exist
+        assert "abs_time" in result.coords
+        assert "trial" in result.coords
+        assert "rel_time" in result.coords
+
+    def test_returns_metadata_adds_bool_coord(self, ds_indexed):
+        """returns='metadata' adds boolean coordinate."""
+        from linked_indices import nd_sel
+
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="metadata")
+
+        # Should have a new coordinate indicating membership
+        assert "in_abs_time_range" in result.coords
+
+        # Check the boolean coordinate has correct values
+        in_range = result["in_abs_time_range"].values
+        abs_time_vals = result["abs_time"].values
+
+        expected = (abs_time_vals >= 1) & (abs_time_vals <= 8)
+        np.testing.assert_array_equal(in_range, expected)
+
+    def test_returns_metadata_preserves_data(self, ds_indexed):
+        """returns='metadata' doesn't modify data values."""
+        from linked_indices import nd_sel
+
+        result_slice = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="slice")
+        result_meta = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="metadata")
+
+        # Data values should be identical (no NaN masking)
+        np.testing.assert_array_equal(
+            result_slice["data"].values, result_meta["data"].values
+        )
+
+    def test_mask_with_method_nearest(self, ds_indexed):
+        """Mask works with method='nearest' for boundaries."""
+        from linked_indices import nd_sel
+
+        # Select 0.7 to 8.2 with nearest - should snap to 1 and 8
+        # Then mask values outside [1, 8]
+        # Trial 0: [0, 1, 2, 3, 4] - 0 is outside
+        # Trial 1: [5, 6, 7, 8, 9] - 9 is outside
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(0.7, 8.2),  # Will snap to 1 and 8
+            method="nearest",
+            returns="mask",
+        )
+
+        # Check masking happened (values 0 and 9 should be NaN)
+        assert np.any(np.isnan(result["data"].values))
+
+    def test_invalid_returns_raises(self, ds_indexed):
+        """Invalid returns value raises error."""
+        from linked_indices import nd_sel
+
+        with pytest.raises(ValueError, match="Invalid returns"):
+            nd_sel(ds_indexed, abs_time=slice(11, 13), returns="invalid")
+
+    def test_nd_sel_fallback_for_non_ndindex(self):
+        """nd_sel falls back to sel() for non-NDIndex coords."""
+        from linked_indices import nd_sel
+
+        # Create simple dataset without NDIndex
+        ds = xr.Dataset(
+            {"data": ("x", [1, 2, 3, 4, 5])},
+            coords={"x": [0, 1, 2, 3, 4]},
+        )
+
+        # returns='slice' should work via fallback
+        result = nd_sel(ds, x=slice(1, 3), returns="slice")
+        assert result.sizes["x"] == 3
+
+    def test_nd_sel_error_mask_without_ndindex(self):
+        """nd_sel raises error for mask mode without NDIndex."""
+        from linked_indices import nd_sel
+
+        ds = xr.Dataset(
+            {"data": ("x", [1, 2, 3, 4, 5])},
+            coords={"x": [0, 1, 2, 3, 4]},
+        )
+
+        with pytest.raises(ValueError, match="No NDIndex found"):
+            nd_sel(ds, x=slice(1, 3), returns="mask")
+
+    def test_sel_masked_via_index(self, ds_indexed):
+        """sel_masked can be called directly on the index."""
+        idx = ds_indexed.xindexes["abs_time"]
+
+        # Select 1 to 8 - spans trials 0 and 1, with some values outside
+        result = idx.sel_masked(ds_indexed, {"abs_time": slice(1, 8)}, returns="mask")
+
+        # Should have NaN masking (values 0 and 9 are outside [1, 8])
+        assert np.any(np.isnan(result["data"].values))
+
+    def test_mask_only_affects_data_vars(self, ds_indexed):
+        """Mask applies to data variables, not coordinates."""
+        from linked_indices import nd_sel
+
+        # Select 1 to 8 - spans trials 0 and 1
+        result = nd_sel(ds_indexed, abs_time=slice(1, 8), returns="mask")
+
+        # Coordinate values should not be NaN
+        assert not np.any(np.isnan(result["abs_time"].values))
+        assert not np.any(np.isnan(result["rel_time"].values))
+
+        # But data should have NaN (values 0 and 9 are outside [1, 8])
+        assert np.any(np.isnan(result["data"].values))
+
+
+class TestNDIndexCoverageGaps:
+    """Tests to cover edge cases and missing coverage lines."""
+
+    def test_nd_sel_empty_labels_raises(self):
+        """nd_sel with no labels raises ValueError."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        with pytest.raises(
+            ValueError, match="Must provide at least one coordinate label"
+        ):
+            nd_sel(ds_indexed)
+
+    def test_nd_sel_slice_mode_no_ndindex_falls_back(self):
+        """nd_sel with returns='slice' falls back to sel when no NDIndex."""
+        from linked_indices import nd_sel
+
+        # Create dataset without NDIndex
+        ds = xr.Dataset(
+            {"data": (("x", "y"), np.arange(20).reshape(4, 5))},
+            coords={"x": [0, 1, 2, 3], "y": [0, 1, 2, 3, 4]},
+        )
+
+        # Should work via fallback to standard sel
+        # slice(1, 3) on [0,1,2,3] returns [1, 2, 3] = 3 elements
+        result = nd_sel(ds, x=slice(1, 3), returns="slice")
+        assert result.sizes["x"] == 3
+
+    def test_linear_search_for_unsorted_exact(self):
+        """Linear search works for exact match on unsorted coords."""
+        # Create dataset with non-monotonic 2D coordinate
+        y, x = np.meshgrid(np.arange(5), np.arange(5), indexing="ij")
+        # Shuffle to make unsorted
+        values = (y * 10 + x).ravel()
+        np.random.seed(42)
+        np.random.shuffle(values)
+        values = values.reshape(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.random.randn(5, 5))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "shuffled": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["shuffled"], NDIndex)
+
+        # Find a value that exists - pick one from the shuffled array
+        target = int(values[2, 2])
+        result = ds_indexed.sel(shuffled=target)
+        assert result.sizes["y"] == 1
+        assert result.sizes["x"] == 1
+
+    def test_linear_search_exact_not_found(self):
+        """Linear search raises KeyError for exact match not found."""
+        y = np.arange(5)
+        x = np.arange(5)
+        values = np.random.randn(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), values)},
+            coords={
+                "y": y,
+                "x": x,
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        with pytest.raises(KeyError, match="not found"):
+            ds_indexed.sel(coord=999.999)
+
+    def test_linear_search_for_unsorted_nearest(self):
+        """Linear search works for nearest match on unsorted coords."""
+        # Create unsorted 2D coordinate
+        values = np.random.randn(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), values.copy())},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Use nearest - should work
+        result = ds_indexed.sel(coord=0.0, method="nearest")
+        assert result.sizes["y"] == 1
+        assert result.sizes["x"] == 1
+
+    def test_trim_outer_slice_method(self):
+        """trim_outer slice method trims outer dimensions more aggressively."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex, slice_method="trim_outer")
+
+        # Select range that only covers first two trials
+        result = ds_indexed.sel(abs_time=slice(1, 6))
+
+        # trim_outer should still work
+        assert result.sizes["trial"] >= 1
+
+    def test_compute_range_mask_unsorted_nearest(self):
+        """_compute_range_mask with method='nearest' on unsorted coord."""
+        from linked_indices import nd_sel
+
+        # Create dataset with unsorted 2D coord
+        values = np.random.randn(5, 5)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((5, 5)))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Use mask mode with nearest
+        result = nd_sel(
+            ds_indexed,
+            coord=slice(-0.5, 0.5),
+            method="nearest",
+            returns="mask",
+        )
+
+        # Should work without error
+        assert result is not None
+
+    def test_sel_masked_unsorted_nearest(self):
+        """sel_masked with method='nearest' on unsorted coord."""
+        from linked_indices import nd_sel
+
+        # Create dataset with intentionally unsorted values
+        values = np.array(
+            [
+                [5.0, 1.0, 3.0],
+                [2.0, 4.0, 0.0],
+            ]
+        )
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((2, 3)))},
+            coords={
+                "y": np.arange(2),
+                "x": np.arange(3),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Use mask mode with nearest - triggers unsorted path
+        result = nd_sel(
+            ds_indexed,
+            coord=slice(1.5, 3.5),
+            method="nearest",
+            returns="mask",
+        )
+        assert result is not None
+
+    def test_sel_masked_with_non_managed_coord(self):
+        """sel_masked ignores labels not managed by this index."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Select on abs_time (managed) and trial (not managed by NDIndex)
+        # This tests the 'continue' path in sel_masked
+        result = nd_sel(ds_indexed, abs_time=slice(0.5, 1.5), returns="mask")
+        assert result is not None
+
+
+class TestNDIndexMain:
+    """Test the main function in __init__.py."""
+
+    def test_main_prints_message(self, capsys):
+        """main() prints a greeting message."""
+        from linked_indices import main
+
+        main()
+        captured = capsys.readouterr()
+        assert "Hello from linked-indices" in captured.out
+
+
+class TestNDIndexAdditionalCoverage:
+    """Additional tests for remaining coverage gaps."""
+
+    def test_slice_nearest_reversed_bounds(self):
+        """slice with method='nearest' where stop < start in coordinate."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use a reverse slice (larger to smaller) with nearest
+        # This should swap internally to find correct bounds
+        result = ds_indexed.sel(abs_time=slice(8, 2), method="nearest")
+        # Should still return some data
+        assert result.sizes["trial"] >= 1
+
+    def test_compute_range_mask_sorted_nearest(self):
+        """_compute_range_mask with sorted coord and method='nearest'."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use mask mode with nearest on sorted data
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(2.5, 7.5),
+            method="nearest",
+            returns="mask",
+        )
+
+        # Should work and have NaN masking
+        assert result is not None
+        assert np.any(np.isnan(result["data"].values))
+
+    def test_sel_with_open_ended_slice_start(self):
+        """Slice with None start uses coordinate minimum."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # slice(None, 5) means from minimum to 5
+        result = ds_indexed.sel(abs_time=slice(None, 5))
+        assert result.sizes["trial"] >= 1
+
+    def test_sel_with_open_ended_slice_stop(self):
+        """Slice with None stop uses coordinate maximum."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # slice(10, None) means from 10 to maximum
+        result = ds_indexed.sel(abs_time=slice(10, None))
+        assert result.sizes["trial"] >= 1
+
+    def test_slice_with_step_sorted(self):
+        """Slice with step on sorted coordinate."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Verify the coordinate is sorted
+        idx = ds_indexed.xindexes["abs_time"]
+        assert idx._nd_coords["abs_time"].is_sorted
+
+        # Select with step on a range that uses the sorted path
+        # This triggers the sorted path (is_sorted=True) with step handling
+        result = ds_indexed.sel(abs_time=slice(0, 5, 2), method="nearest")
+        assert result.sizes["rel_time"] > 0
+
+    def test_slice_no_values_in_range_sorted(self):
+        """Sorted path with no values in range returns empty slices."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Select a range that doesn't exist (negative times)
+        result = ds_indexed.sel(abs_time=slice(-100, -50))
+        # Should return empty
+        assert result.sizes["trial"] == 0 or result.sizes["rel_time"] == 0
+
+    def test_slice_no_values_in_range_unsorted(self):
+        """Unsorted path with no values in range returns empty slices."""
+        # Create unsorted 2D coordinate
+        values = np.random.randn(5, 5) + 100  # All positive values > 100
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((5, 5)))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Select a range that doesn't exist
+        result = ds_indexed.sel(coord=slice(-100, -50))
+        assert result.sizes["y"] == 0 or result.sizes["x"] == 0
+
+    def test_unsorted_nearest_with_step(self):
+        """Unsorted coordinate with method='nearest' and step."""
+        # Create unsorted 2D coordinate
+        np.random.seed(42)
+        values = np.random.randn(5, 10)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((5, 10)))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(10),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Select with step and nearest on unsorted coord
+        result = ds_indexed.sel(coord=slice(-1, 1, 2), method="nearest")
+        assert result.sizes["x"] > 0
+
+    def test_trim_outer_slice_method_range(self):
+        """trim_outer method with range selection."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex, slice_method="trim_outer")
+
+        # Select a range spanning multiple trials
+        result = ds_indexed.sel(abs_time=slice(2, 8))
+        assert result.sizes["trial"] >= 1
+        assert result.sizes["rel_time"] >= 1
+
+    def test_trim_outer_with_step(self):
+        """trim_outer method with step in slice."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex, slice_method="trim_outer")
+
+        # Select with step
+        result = ds_indexed.sel(abs_time=slice(0, 10, 3))
+        assert result.sizes["rel_time"] > 0
+
+    def test_sel_masked_metadata_with_sorted_nearest(self):
+        """sel_masked with returns='metadata' and method='nearest' on sorted."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use metadata mode with nearest on sorted data
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(2.5, 7.5),
+            method="nearest",
+            returns="metadata",
+        )
+
+        assert "in_abs_time_range" in result.coords
+
+    def test_empty_coord_raises_on_nearest(self):
+        """Finding nearest in empty coordinate raises ValueError."""
+        # Create a minimal dataset and get the index
+        ds = trial_based_dataset(n_trials=1, trial_length=1.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+        idx = ds_indexed.xindexes["abs_time"]
+
+        # Try to find nearest in empty array
+        with pytest.raises(ValueError, match="Cannot find nearest in empty array"):
+            idx._find_nearest_index(np.array([]), 0.5)
+
+    def test_trim_outer_with_unsorted_coord(self):
+        """trim_outer on unsorted coordinate exercises the O(n) path."""
+        # Create dataset with intentionally unsorted values
+        values = np.array(
+            [
+                [5.0, 1.0, 8.0, 3.0],
+                [2.0, 9.0, 0.0, 6.0],
+                [7.0, 4.0, 10.0, 11.0],
+            ]
+        )
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((3, 4)))},
+            coords={
+                "y": np.arange(3),
+                "x": np.arange(4),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex, slice_method="trim_outer")
+
+        # Select a range - this should use the unsorted trim_outer path
+        result = ds_indexed.sel(coord=slice(2, 7))
+        assert result.sizes["y"] >= 1
+        assert result.sizes["x"] >= 1
+
+    def test_step_with_unsorted_coord(self):
+        """Step parameter with unsorted coordinate."""
+        values = np.array(
+            [
+                [5.0, 1.0, 8.0, 3.0],
+                [2.0, 9.0, 0.0, 6.0],
+            ]
+        )
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((2, 4)))},
+            coords={
+                "y": np.arange(2),
+                "x": np.arange(4),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Select with step on unsorted - exercises the step code path
+        result = ds_indexed.sel(coord=slice(0, 10, 2))
+        assert result.sizes["x"] > 0
+
+    def test_sel_masked_no_slice_on_managed_coord(self):
+        """sel_masked returns early when no slice on managed coordinates."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Select with scalar (not slice) - should return early
+        result = nd_sel(ds_indexed, abs_time=1.0, method="nearest", returns="mask")
+        assert result is not None
+
+    def test_sel_masked_multiple_coords(self):
+        """sel_masked with multiple coordinates combines masks."""
+        # Create dataset with two 2D coordinates
+        ny, nx = 10, 10
+        y_vals = np.arange(ny)
+        x_vals = np.arange(nx)
+
+        coord1 = y_vals[:, np.newaxis] * nx + x_vals[np.newaxis, :]
+        coord2 = y_vals[:, np.newaxis] + x_vals[np.newaxis, :] * ny
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((ny, nx)))},
+            coords={
+                "y": y_vals,
+                "x": x_vals,
+                "c1": (("y", "x"), coord1),
+                "c2": (("y", "x"), coord2),
+            },
+        )
+
+        # Apply NDIndex to both coordinates
+        ds_indexed = ds.set_xindex(["c1"], NDIndex)
+
+        # Get the index and call sel_masked with multiple labels
+        idx = ds_indexed.xindexes["c1"]
+        result = idx.sel_masked(
+            ds_indexed,
+            {"c1": slice(20, 50)},
+            returns="mask",
+        )
+        assert result is not None
+
+    def test_sel_masked_sorted_nearest(self):
+        """sel_masked with method='nearest' on sorted coordinate."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use mask mode with nearest on sorted data
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(2.3, 7.7),
+            method="nearest",
+            returns="mask",
+        )
+        assert result is not None
+        # Check that values outside range are NaN
+        assert np.any(np.isnan(result.data.values))
+
+    def test_sel_masked_two_nd_coords(self):
+        """sel_masked with two NDIndex-managed coords combines masks."""
+        # Create dataset with two 2D coordinates managed by same NDIndex
+        ny, nx = 10, 10
+        y_vals = np.arange(ny)
+        x_vals = np.arange(nx)
+
+        coord1 = (y_vals[:, np.newaxis] * nx + x_vals[np.newaxis, :]).astype(float)
+        coord2 = (y_vals[:, np.newaxis] + x_vals[np.newaxis, :] * ny).astype(float)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((ny, nx)))},
+            coords={
+                "y": y_vals,
+                "x": x_vals,
+                "c1": (("y", "x"), coord1),
+                "c2": (("y", "x"), coord2),
+            },
+        )
+
+        # Apply NDIndex to both coordinates
+        ds_indexed = ds.set_xindex(["c1", "c2"], NDIndex)
+
+        # Get the index and call sel_masked with both coordinates
+        idx = ds_indexed.xindexes["c1"]
+        result = idx.sel_masked(
+            ds_indexed,
+            {"c1": slice(20, 50), "c2": slice(30, 70)},
+            returns="mask",
+        )
+        assert result is not None

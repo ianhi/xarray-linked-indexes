@@ -65,7 +65,7 @@ def speech_annotations() -> pd.DataFrame:
         [4.5, 2.0, "how"],
         [7.0, 2.5, "are"],
     ]
-    return pd.DataFrame(data, columns=["onset", "duration", "word"])
+    return pd.DataFrame(data, columns=["onset", "duration", "word"])  # type: ignore[arg-type]
 
 
 def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -104,7 +104,8 @@ def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
         [6.0, 3.5, "test", "noun"],
     ]
     word_df = pd.DataFrame(
-        word_data, columns=["onset", "duration", "word", "part_of_speech"]
+        word_data,
+        columns=["onset", "duration", "word", "part_of_speech"],  # type: ignore[arg-type]
     )
 
     # Phoneme-level annotations (more fine-grained)
@@ -118,7 +119,7 @@ def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
         [6.0, 1.2, "t"],
         [7.2, 2.3, "st"],
     ]
-    phoneme_df = pd.DataFrame(phoneme_data, columns=["onset", "duration", "phoneme"])
+    phoneme_df = pd.DataFrame(phoneme_data, columns=["onset", "duration", "phoneme"])  # type: ignore[arg-type]
 
     return word_df, phoneme_df
 
@@ -166,7 +167,7 @@ def mixed_event_annotations() -> pd.DataFrame:
         [0.0, 5.0, "image_A", "stimulus"],
         [5.0, 5.0, "image_B", "stimulus"],
     ]
-    return pd.DataFrame(data, columns=["onset", "duration", "label", "event_type"])
+    return pd.DataFrame(data, columns=["onset", "duration", "label", "event_type"])  # type: ignore[arg-type]
 
 
 def generate_audio_signal(
@@ -716,7 +717,9 @@ def create_trial_ndindex_dataset(n_trials: int, n_times: int) -> "xr.Dataset":
     --------
     >>> from linked_indices.example_data import create_trial_ndindex_dataset
     >>> ds = create_trial_ndindex_dataset(10, 100)
-    >>> ds.sel(abs_time=0.5, method="nearest")  # Select by absolute time
+    >>> result = ds.sel(abs_time=0.5, method="nearest")  # Select by absolute time
+    >>> result.sizes['trial']
+    1
     """
     import xarray as xr
 
@@ -762,7 +765,9 @@ def create_diagonal_dataset(ny: int, nx: int) -> "xr.Dataset":
     --------
     >>> from linked_indices.example_data import create_diagonal_dataset
     >>> ds = create_diagonal_dataset(100, 100)
-    >>> ds.sel(derived=50, method="nearest")
+    >>> result = ds.sel(derived=50, method="nearest")
+    >>> int(result.derived)
+    50
     """
     import xarray as xr
 
@@ -811,7 +816,9 @@ def create_radial_dataset(ny: int, nx: int) -> "xr.Dataset":
     --------
     >>> from linked_indices.example_data import create_radial_dataset
     >>> ds = create_radial_dataset(100, 100)
-    >>> ds.sel(radius=slice(10, 20))  # Select an annulus
+    >>> result = ds.sel(radius=slice(10, 20))  # Select an annulus
+    >>> result.sizes['y'] > 0 and result.sizes['x'] > 0
+    True
     """
     import xarray as xr
 
@@ -861,7 +868,9 @@ def create_jittered_dataset(
     --------
     >>> from linked_indices.example_data import create_jittered_dataset
     >>> ds = create_jittered_dataset(10, 100, jitter_std=0.2)
-    >>> ds.sel(abs_time=0.5, method="nearest")
+    >>> result = ds.sel(abs_time=0.5, method="nearest")
+    >>> result.sizes['trial']
+    1
     """
     import xarray as xr
 
