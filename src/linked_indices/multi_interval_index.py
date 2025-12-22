@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from numbers import Integral
-from typing import Any
+from typing import Any, cast
 
 from collections import defaultdict
 
@@ -322,6 +322,7 @@ class DimensionInterval(Index):
                             {name: var}, options=options
                         )
 
+            assert interval_index is not None, f"No interval index found for {dim_name}"
             interval_dims[dim_name] = IntervalDimInfo(
                 dim_name=dim_name,
                 coord_name=coord_name,
@@ -347,8 +348,10 @@ class DimensionInterval(Index):
             debug=debug,
         )
 
-    def create_variables(self, variables):
-        idx_variables = {}
+    def create_variables(
+        self, variables: Mapping[Any, Variable] | None = None
+    ) -> dict[Any, Variable]:
+        idx_variables: dict[Any, Variable] = {}
 
         idx_variables.update(self._continuous_index.create_variables(variables))
 
@@ -431,7 +434,7 @@ class DimensionInterval(Index):
             )
 
         # Find which intervals overlap
-        overlaps = interval_index.overlaps(query_interval)
+        overlaps = interval_index.overlaps(query_interval)  # type: ignore[union-attr]
         overlap_indices = np.where(overlaps)[0]
 
         if self._debug:
@@ -603,7 +606,7 @@ class DimensionInterval(Index):
                     continue
 
                 overlap_slice = self._get_overlapping_slice(
-                    info.interval_index.index,
+                    cast(pd.IntervalIndex, info.interval_index.index),
                     time_range,
                 )
 
@@ -681,7 +684,7 @@ class DimensionInterval(Index):
             ) is not _MISSING or (
                 dim_name := self._label_to_dim.get(key, _MISSING)
             ) is not _MISSING:
-                info = self._interval_dims[dim_name]
+                info = self._interval_dims[cast(str, dim_name)]
                 # Use label index if key is a label, otherwise use interval index
                 idx = info.label_indexes.get(key, info.interval_index)
                 sel_res = idx.sel({key: value}, method=method, tolerance=tolerance)
@@ -714,7 +717,7 @@ class DimensionInterval(Index):
 
                 # Find overlapping intervals
                 overlap_slice = self._get_overlapping_slice(
-                    info.interval_index.index,
+                    cast(pd.IntervalIndex, info.interval_index.index),
                     time_range,
                 )
 

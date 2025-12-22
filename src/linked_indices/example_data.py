@@ -65,7 +65,7 @@ def speech_annotations() -> pd.DataFrame:
         [4.5, 2.0, "how"],
         [7.0, 2.5, "are"],
     ]
-    return pd.DataFrame(data, columns=["onset", "duration", "word"])
+    return pd.DataFrame(data, columns=["onset", "duration", "word"])  # type: ignore[arg-type]
 
 
 def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -104,7 +104,8 @@ def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
         [6.0, 3.5, "test", "noun"],
     ]
     word_df = pd.DataFrame(
-        word_data, columns=["onset", "duration", "word", "part_of_speech"]
+        word_data,
+        columns=["onset", "duration", "word", "part_of_speech"],  # type: ignore[arg-type]
     )
 
     # Phoneme-level annotations (more fine-grained)
@@ -118,7 +119,7 @@ def multi_level_annotations() -> tuple[pd.DataFrame, pd.DataFrame]:
         [6.0, 1.2, "t"],
         [7.2, 2.3, "st"],
     ]
-    phoneme_df = pd.DataFrame(phoneme_data, columns=["onset", "duration", "phoneme"])
+    phoneme_df = pd.DataFrame(phoneme_data, columns=["onset", "duration", "phoneme"])  # type: ignore[arg-type]
 
     return word_df, phoneme_df
 
@@ -166,7 +167,7 @@ def mixed_event_annotations() -> pd.DataFrame:
         [0.0, 5.0, "image_A", "stimulus"],
         [5.0, 5.0, "image_B", "stimulus"],
     ]
-    return pd.DataFrame(data, columns=["onset", "duration", "label", "event_type"])
+    return pd.DataFrame(data, columns=["onset", "duration", "label", "event_type"])  # type: ignore[arg-type]
 
 
 def generate_audio_signal(

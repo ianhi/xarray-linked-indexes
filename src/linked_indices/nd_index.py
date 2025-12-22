@@ -168,7 +168,7 @@ class NDIndex(Index):
 
             nd_coords[name] = NDCoord(
                 name=name,
-                dims=var.dims,
+                dims=tuple(str(d) for d in var.dims),
                 values=var.values,
             )
 
@@ -184,11 +184,13 @@ class NDIndex(Index):
 
         return cls(nd_coords=nd_coords, slice_method=slice_method, debug=debug)
 
-    def create_variables(self, variables):
+    def create_variables(
+        self, variables: Mapping[Any, Variable] | None = None
+    ) -> dict[Any, Variable]:
         """Create index variables for the dataset."""
         from xarray.core.variable import Variable as XrVariable
 
-        idx_variables = {}
+        idx_variables: dict[Any, Variable] = {}
         for name, ndc in self._nd_coords.items():
             idx_variables[name] = XrVariable(dims=ndc.dims, data=ndc.values)
         return idx_variables
@@ -236,7 +238,7 @@ class NDIndex(Index):
         self, flat_values: np.ndarray, value: float, method: str | None, coord_name: str
     ) -> int:
         """O(log n) binary search for sorted arrays."""
-        idx = np.searchsorted(flat_values, value)
+        idx = int(np.searchsorted(flat_values, value))
         n = len(flat_values)
 
         if method == "nearest":
@@ -276,7 +278,7 @@ class NDIndex(Index):
         idx = (
             searchsorted_idx
             if searchsorted_idx is not None
-            else np.searchsorted(flat_values, value)
+            else int(np.searchsorted(flat_values, value))
         )
 
         if idx == 0:
@@ -287,9 +289,9 @@ class NDIndex(Index):
             left_val = flat_values[idx - 1]
             right_val = flat_values[idx]
             if abs(value - left_val) <= abs(value - right_val):
-                return idx - 1
+                return int(idx - 1)
             else:
-                return idx
+                return int(idx)
 
     def _linear_search(
         self, values: np.ndarray, value: float, method: str | None, coord_name: str

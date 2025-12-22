@@ -15,7 +15,7 @@ __all__ = ["timeit_benchmark", "benchmark_selection_scaling"]
 
 
 def timeit_benchmark(
-    stmt: str | callable,
+    stmt: str | Callable[[], Any],
     setup: str = "pass",
     globals: dict[str, Any] | None = None,
     repeat: int = 7,
