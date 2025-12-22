@@ -6,6 +6,7 @@ except ImportError:
 from .multi_interval_index import DimensionInterval
 from .nd_index import NDIndex, nd_sel
 from . import example_data
+from . import viz
 
 __all__ = [
     "DimensionInterval",
@@ -13,6 +14,7 @@ __all__ = [
     "nd_sel",
     "__version__",
     "example_data",
+    "viz",
 ]
 
 
