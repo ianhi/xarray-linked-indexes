@@ -1422,3 +1422,113 @@ class TestNDIndexAdditionalCoverage:
         # slice(10, None) means from 10 to maximum
         result = ds_indexed.sel(abs_time=slice(10, None))
         assert result.sizes["trial"] >= 1
+
+    def test_slice_with_step_sorted(self):
+        """Slice with step on sorted coordinate."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Verify the coordinate is sorted
+        idx = ds_indexed.xindexes["abs_time"]
+        assert idx._nd_coords["abs_time"].is_sorted
+
+        # Select with step on a range that uses the sorted path
+        # This triggers the sorted path (is_sorted=True) with step handling
+        result = ds_indexed.sel(abs_time=slice(0, 5, 2), method="nearest")
+        assert result.sizes["rel_time"] > 0
+
+    def test_slice_no_values_in_range_sorted(self):
+        """Sorted path with no values in range returns empty slices."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Select a range that doesn't exist (negative times)
+        result = ds_indexed.sel(abs_time=slice(-100, -50))
+        # Should return empty
+        assert result.sizes["trial"] == 0 or result.sizes["rel_time"] == 0
+
+    def test_slice_no_values_in_range_unsorted(self):
+        """Unsorted path with no values in range returns empty slices."""
+        # Create unsorted 2D coordinate
+        values = np.random.randn(5, 5) + 100  # All positive values > 100
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((5, 5)))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(5),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Select a range that doesn't exist
+        result = ds_indexed.sel(coord=slice(-100, -50))
+        assert result.sizes["y"] == 0 or result.sizes["x"] == 0
+
+    def test_unsorted_nearest_with_step(self):
+        """Unsorted coordinate with method='nearest' and step."""
+        # Create unsorted 2D coordinate
+        np.random.seed(42)
+        values = np.random.randn(5, 10)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((5, 10)))},
+            coords={
+                "y": np.arange(5),
+                "x": np.arange(10),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Select with step and nearest on unsorted coord
+        result = ds_indexed.sel(coord=slice(-1, 1, 2), method="nearest")
+        assert result.sizes["x"] > 0
+
+    def test_trim_outer_slice_method_range(self):
+        """trim_outer method with range selection."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex, slice_method="trim_outer")
+
+        # Select a range spanning multiple trials
+        result = ds_indexed.sel(abs_time=slice(2, 8))
+        assert result.sizes["trial"] >= 1
+        assert result.sizes["rel_time"] >= 1
+
+    def test_trim_outer_with_step(self):
+        """trim_outer method with step in slice."""
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex, slice_method="trim_outer")
+
+        # Select with step
+        result = ds_indexed.sel(abs_time=slice(0, 10, 3))
+        assert result.sizes["rel_time"] > 0
+
+    def test_sel_masked_metadata_with_sorted_nearest(self):
+        """sel_masked with returns='metadata' and method='nearest' on sorted."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use metadata mode with nearest on sorted data
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(2.5, 7.5),
+            method="nearest",
+            returns="metadata",
+        )
+
+        assert "in_abs_time_range" in result.coords
+
+    def test_empty_coord_raises_on_nearest(self):
+        """Finding nearest in empty coordinate raises ValueError."""
+        # Create a minimal dataset and get the index
+        ds = trial_based_dataset(n_trials=1, trial_length=1.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+        idx = ds_indexed.xindexes["abs_time"]
+
+        # Try to find nearest in empty array
+        with pytest.raises(ValueError, match="Cannot find nearest in empty array"):
+            idx._find_nearest_index(np.array([]), 0.5)
