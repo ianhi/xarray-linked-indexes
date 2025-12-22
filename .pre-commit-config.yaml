@@ -26,9 +26,3 @@ repos:
       - id: ruff-check
       # Run the formatter.
       - id: ruff-format
-
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1
-    hooks:
-      - id: nbstripout
-        files: "docs/.*\\.ipynb$"
