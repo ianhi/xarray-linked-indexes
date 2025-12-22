@@ -33,6 +33,8 @@ project:
           title: MultiIndex
         - file: alt-direct-coords.ipynb
           title: Direct Coords
+        - file: alt-ndpoint.ipynb
+          title: NDPointIndex
 site:
   title: linked-indices
   template: book-theme
