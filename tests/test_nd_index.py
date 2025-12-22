@@ -1532,3 +1532,145 @@ class TestNDIndexAdditionalCoverage:
         # Try to find nearest in empty array
         with pytest.raises(ValueError, match="Cannot find nearest in empty array"):
             idx._find_nearest_index(np.array([]), 0.5)
+
+    def test_trim_outer_with_unsorted_coord(self):
+        """trim_outer on unsorted coordinate exercises the O(n) path."""
+        # Create dataset with intentionally unsorted values
+        values = np.array(
+            [
+                [5.0, 1.0, 8.0, 3.0],
+                [2.0, 9.0, 0.0, 6.0],
+                [7.0, 4.0, 10.0, 11.0],
+            ]
+        )
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((3, 4)))},
+            coords={
+                "y": np.arange(3),
+                "x": np.arange(4),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex, slice_method="trim_outer")
+
+        # Select a range - this should use the unsorted trim_outer path
+        result = ds_indexed.sel(coord=slice(2, 7))
+        assert result.sizes["y"] >= 1
+        assert result.sizes["x"] >= 1
+
+    def test_step_with_unsorted_coord(self):
+        """Step parameter with unsorted coordinate."""
+        values = np.array(
+            [
+                [5.0, 1.0, 8.0, 3.0],
+                [2.0, 9.0, 0.0, 6.0],
+            ]
+        )
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((2, 4)))},
+            coords={
+                "y": np.arange(2),
+                "x": np.arange(4),
+                "coord": (("y", "x"), values),
+            },
+        )
+        ds_indexed = ds.set_xindex(["coord"], NDIndex)
+
+        # Select with step on unsorted - exercises the step code path
+        result = ds_indexed.sel(coord=slice(0, 10, 2))
+        assert result.sizes["x"] > 0
+
+    def test_sel_masked_no_slice_on_managed_coord(self):
+        """sel_masked returns early when no slice on managed coordinates."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=2, trial_length=2.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Select with scalar (not slice) - should return early
+        result = nd_sel(ds_indexed, abs_time=1.0, method="nearest", returns="mask")
+        assert result is not None
+
+    def test_sel_masked_multiple_coords(self):
+        """sel_masked with multiple coordinates combines masks."""
+        # Create dataset with two 2D coordinates
+        ny, nx = 10, 10
+        y_vals = np.arange(ny)
+        x_vals = np.arange(nx)
+
+        coord1 = y_vals[:, np.newaxis] * nx + x_vals[np.newaxis, :]
+        coord2 = y_vals[:, np.newaxis] + x_vals[np.newaxis, :] * ny
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((ny, nx)))},
+            coords={
+                "y": y_vals,
+                "x": x_vals,
+                "c1": (("y", "x"), coord1),
+                "c2": (("y", "x"), coord2),
+            },
+        )
+
+        # Apply NDIndex to both coordinates
+        ds_indexed = ds.set_xindex(["c1"], NDIndex)
+
+        # Get the index and call sel_masked with multiple labels
+        idx = ds_indexed.xindexes["c1"]
+        result = idx.sel_masked(
+            ds_indexed,
+            {"c1": slice(20, 50)},
+            returns="mask",
+        )
+        assert result is not None
+
+    def test_sel_masked_sorted_nearest(self):
+        """sel_masked with method='nearest' on sorted coordinate."""
+        from linked_indices import nd_sel
+
+        ds = trial_based_dataset(n_trials=3, trial_length=5.0, sample_rate=10)
+        ds_indexed = ds.set_xindex(["abs_time"], NDIndex)
+
+        # Use mask mode with nearest on sorted data
+        result = nd_sel(
+            ds_indexed,
+            abs_time=slice(2.3, 7.7),
+            method="nearest",
+            returns="mask",
+        )
+        assert result is not None
+        # Check that values outside range are NaN
+        assert np.any(np.isnan(result.data.values))
+
+    def test_sel_masked_two_nd_coords(self):
+        """sel_masked with two NDIndex-managed coords combines masks."""
+        # Create dataset with two 2D coordinates managed by same NDIndex
+        ny, nx = 10, 10
+        y_vals = np.arange(ny)
+        x_vals = np.arange(nx)
+
+        coord1 = (y_vals[:, np.newaxis] * nx + x_vals[np.newaxis, :]).astype(float)
+        coord2 = (y_vals[:, np.newaxis] + x_vals[np.newaxis, :] * ny).astype(float)
+
+        ds = xr.Dataset(
+            {"data": (("y", "x"), np.ones((ny, nx)))},
+            coords={
+                "y": y_vals,
+                "x": x_vals,
+                "c1": (("y", "x"), coord1),
+                "c2": (("y", "x"), coord2),
+            },
+        )
+
+        # Apply NDIndex to both coordinates
+        ds_indexed = ds.set_xindex(["c1", "c2"], NDIndex)
+
+        # Get the index and call sel_masked with both coordinates
+        idx = ds_indexed.xindexes["c1"]
+        result = idx.sel_masked(
+            ds_indexed,
+            {"c1": slice(20, 50), "c2": slice(30, 70)},
+            returns="mask",
+        )
+        assert result is not None

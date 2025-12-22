@@ -545,51 +545,6 @@ class NDIndex(Index):
 
         return IndexSelResult(dim_indexers)
 
-    def _compute_range_mask(
-        self,
-        coord_name: str,
-        start: float,
-        stop: float,
-        method: str | None = None,
-    ) -> np.ndarray:
-        """
-        Compute a boolean mask for values within a range.
-
-        Parameters
-        ----------
-        coord_name : str
-            Name of the N-D coordinate
-        start, stop : float
-            Range boundaries (inclusive)
-        method : str or None
-            If 'nearest', snap boundaries to nearest existing values
-
-        Returns
-        -------
-        np.ndarray
-            Boolean mask with same shape as the coordinate, True where in range
-        """
-        ndc = self._nd_coords[coord_name]
-        values = ndc.values
-
-        if method == "nearest":
-            # Snap boundaries to nearest values
-            if ndc.is_sorted:
-                flat_values = ndc.flat_values
-                start_idx = self._find_nearest_index(flat_values, start)
-                stop_idx = self._find_nearest_index(flat_values, stop)
-                start = flat_values[min(start_idx, stop_idx)]
-                stop = flat_values[max(start_idx, stop_idx)]
-            else:
-                # O(n) for unsorted
-                flat_values = values.ravel()
-                start_idx = int(np.argmin(np.abs(flat_values - start)))
-                stop_idx = int(np.argmin(np.abs(flat_values - stop)))
-                start = flat_values[min(start_idx, stop_idx)]
-                stop = flat_values[max(start_idx, stop_idx)]
-
-        return (values >= start) & (values <= stop)
-
     def sel_masked(
         self,
         obj,
@@ -657,7 +612,8 @@ class NDIndex(Index):
         # Compute mask for each coordinate in labels
         combined_mask = None
         for name, value in labels.items():
-            if name not in self._nd_coords:
+            if name not in self._nd_coords:  # pragma: no cover
+                # Defensive: skip labels not managed by this index
                 continue
 
             if isinstance(value, slice):

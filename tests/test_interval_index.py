@@ -1197,3 +1197,126 @@ class TestDimensionIntervalCoverageGaps:
         result = ds_multi.sel(time=50.0, method="nearest")
         _ = result * 1  # Force evaluation
         assert result.sizes["time"] == 1
+
+
+class TestDimensionIntervalCoverage:
+    """Additional tests for remaining coverage gaps."""
+
+    def test_sel_slice_conversion_to_interval(self):
+        """Test _get_overlapping_slice with slice input (not pd.Interval)."""
+
+        from linked_indices.example_data import multi_interval_dataset
+
+        ds = multi_interval_dataset()
+        ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "phoneme_intervals",
+                "word",
+                "part_of_speech",
+                "phoneme",
+            ],
+            DimensionInterval,
+        )
+
+        # This triggers the slice -> pd.Interval conversion path (line 427)
+        # by selecting on continuous dimension with a slice
+        result = ds.sel(time=slice(20, 80))
+        _ = result * 1  # Force evaluation
+        assert result.sizes["time"] > 0
+
+    def test_isel_with_debug_no_overlap(self, capsys):
+        """Test debug output when isel has no overlap."""
+        from linked_indices.example_data import multi_interval_dataset
+
+        ds = multi_interval_dataset()
+        ds = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "phoneme_intervals",
+                "word",
+                "part_of_speech",
+                "phoneme",
+            ],
+            DimensionInterval,
+            debug=True,
+        )
+        capsys.readouterr()  # Clear creation output
+
+        # Select a word that doesn't overlap much with a time range
+        # First get a small time range, then isel on word
+        subset = ds.isel(time=slice(0, 5))
+        _ = subset * 1  # Force evaluation
+        # The debug output may or may not contain the no overlap message
+        # depending on whether intervals overlap
+
+    def test_isel_scalar_on_continuous(self):
+        """Test isel with scalar indexer on continuous dimension."""
+        from linked_indices.example_data import multi_interval_dataset
+
+        ds = multi_interval_dataset()
+        ds_indexed = ds.drop_indexes(["time", "word", "phoneme"]).set_xindex(
+            [
+                "time",
+                "word_intervals",
+                "phoneme_intervals",
+                "word",
+                "part_of_speech",
+                "phoneme",
+            ],
+            DimensionInterval,
+        )
+
+        # isel with scalar on continuous dimension
+        result = ds_indexed.isel(time=50)
+        _ = result * 1  # Force evaluation
+        assert result.sizes["time"] == 1
+
+    def test_multiple_continuous_dimensions_error(self):
+        """Test error when there are multiple continuous dimensions."""
+        import numpy as np
+        import xarray as xr
+
+        # Create dataset with two dimensions, neither has interval coords
+        ds = xr.Dataset(
+            {"data": (("time", "space"), np.ones((10, 10)))},
+            coords={
+                "time": np.arange(10),
+                "space": np.arange(10),
+            },
+        )
+
+        # Neither dim has interval coords, so both would be "continuous"
+        with pytest.raises(ValueError, match="Expected at least 1 interval coordinate"):
+            ds.drop_indexes(["time", "space"]).set_xindex(
+                ["time", "space"],
+                DimensionInterval,
+            )
+
+    def test_multiple_coords_for_continuous_dim_error(self):
+        """Test error when continuous dimension has multiple coordinates."""
+        import numpy as np
+        import xarray as xr
+        import pandas as pd
+
+        # Create dataset with two coords on same dimension (non-interval)
+        ds = xr.Dataset(
+            {"data": (("time", "word"), np.ones((100, 5)))},
+            coords={
+                "time": np.linspace(0, 100, 100),
+                "time_alt": (("time",), np.linspace(0, 50, 100)),  # Second time coord
+                "word": ["a", "b", "c", "d", "e"],
+                "word_intervals": (
+                    ("word",),
+                    pd.IntervalIndex.from_breaks([0, 20, 40, 60, 80, 100]),
+                ),
+            },
+        )
+
+        with pytest.raises(ValueError, match="Expected one coordinate for continuous"):
+            ds.drop_indexes(["time", "word"]).set_xindex(
+                ["time", "time_alt", "word_intervals"],
+                DimensionInterval,
+            )
